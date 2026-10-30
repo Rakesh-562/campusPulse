@@ -16,6 +16,9 @@ def load_lifestyle(path="data/raw/student_lifestyle_dataset.csv"):
 
 def load_uci(mat="data/raw/student-mat.csv",
              por="data/raw/student-por.csv"):
+    for path in (mat, por):
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"File not found: {path}")
     df_mat = pd.read_csv(mat, sep=";")
     df_por = pd.read_csv(por, sep=";")
     df_mat["subject"] = "math"
@@ -24,7 +27,9 @@ def load_uci(mat="data/raw/student-mat.csv",
     print(f"UCI loaded: {df.shape}")
     return df
 
-def load_mental_health(path="data/raw/student Mental health.csv"):
+def load_mental_health(path="data/raw/Student Mental health.csv"):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"File not found: {path}")
     df = pd.read_csv(path)
     print(f"Mental Health loaded: {df.shape}")
     return df
