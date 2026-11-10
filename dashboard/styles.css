@@ -1,0 +1,156 @@
+/* CampusPulse dashboard: plain CSS, no framework. Colour tokens follow a validated palette
+   (series-1/2 pass CVD + contrast checks in both modes). */
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-2: #f3f2ee;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #6f6d68;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --series-1: #2a78d6;   /* baseline / students / primary series */
+  --series-2: #eb6834;   /* intervention / staff / comparison */
+  --series-3: #1baf7a;   /* third cluster (first 3 slots pass all-pairs checks) */
+  --accent: #2a78d6;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --good-text: #006300;
+  --radius: 10px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #9b9990;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --accent: #3987e5; --good-text: #0ca30c;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #9b9990;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, 0.10);
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --accent: #3987e5; --good-text: #0ca30c;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+html { overflow-x: hidden; }
+body { background: var(--page); color: var(--ink); font: 15px/1.55 var(--font); }
+a { color: var(--accent); }
+h1, h2, h3, h4 { line-height: 1.25; margin: 0 0 .4em; }
+h1 { font-size: 1.55rem; }
+h2 { font-size: 1.25rem; margin-top: 2.2rem; }
+h3 { font-size: 1.02rem; }
+p { margin: 0 0 .8em; max-width: 72ch; }
+.muted { color: var(--muted); }
+.small { font-size: .86rem; }
+code { font-size: .86em; background: var(--surface-2); padding: .1em .35em; border-radius: 4px; }
+
+/* ---- header / nav */
+header.top { background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10; }
+.top-inner { max-width: 1160px; margin: 0 auto; padding: 12px 20px; display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.brand { font-weight: 650; font-size: 1.05rem; color: var(--ink); text-decoration: none; margin-right: 6px; }
+.brand span { color: var(--muted); font-weight: 450; }
+nav.tabs { display: flex; gap: 2px; flex-wrap: wrap; flex: 1; }
+nav.tabs a { color: var(--ink-2); text-decoration: none; padding: 6px 10px; border-radius: 6px; font-size: .92rem; }
+nav.tabs a:hover { background: var(--surface-2); }
+nav.tabs a.active { background: var(--surface-2); color: var(--ink); font-weight: 600; }
+nav.tabs a .off { color: var(--muted); }
+button.theme { border: 1px solid var(--border); background: transparent; color: var(--ink-2); border-radius: 6px; padding: 5px 10px; cursor: pointer; font: inherit; font-size: .85rem; }
+
+main { max-width: 1160px; margin: 0 auto; padding: 26px 20px 60px; }
+.lede { font-size: 1.06rem; color: var(--ink-2); max-width: 78ch; }
+.question { font-size: 1.15rem; border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; margin: 14px 0 18px; max-width: 80ch; }
+
+/* ---- layout */
+.grid { display: grid; gap: 16px; }
+.g2 { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+.g3 { grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); }
+.g5 { grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; min-width: 0; }
+.card h3 { margin-bottom: .25em; }
+.card .sub { color: var(--muted); font-size: .86rem; margin-bottom: 10px; }
+.card.link { text-decoration: none; color: inherit; display: block; transition: border-color .15s; }
+.card.link:hover { border-color: var(--accent); }
+.card.unavailable { background: var(--surface-2); }
+
+/* ---- stat tiles */
+.tile .label { color: var(--ink-2); font-size: .86rem; }
+.tile .value { font-size: 1.7rem; font-weight: 620; margin: 2px 0; }
+.tile .value.compact { font-size: 1.35rem; white-space: nowrap; }
+.tile .note { color: var(--muted); font-size: .82rem; }
+
+/* ---- tables */
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--ink-2); font-weight: 600; font-size: .82rem; white-space: nowrap; }
+td.nowrap { white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr:hover td { background: var(--surface-2); }
+
+/* ---- status chips (icon + label, never colour alone) */
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: .8rem; padding: 2px 8px 2px 6px; border-radius: 999px;
+        background: var(--surface-2); color: var(--ink); white-space: nowrap; }
+.chip i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; font-style: normal; }
+.chip.holds i { background: var(--good); }
+.chip.weakens i { background: var(--warning); }
+.chip.inflates i { background: var(--serious); }
+.chip.reverses i { background: var(--critical); }
+.chip.na i { background: var(--axis); }
+.badge { display: inline-block; font-size: .74rem; font-weight: 600; letter-spacing: .02em; padding: 1px 7px; border-radius: 4px;
+         border: 1px solid var(--border); color: var(--ink-2); }
+
+/* ---- decision explorer */
+.controls { display: flex; flex-wrap: wrap; gap: 12px 18px; margin: 8px 0 14px; }
+.controls label { display: flex; flex-direction: column; gap: 3px; font-size: .82rem; color: var(--ink-2); }
+select { font: inherit; font-size: .9rem; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--axis); background: var(--surface); color: var(--ink); }
+
+/* ---- charts */
+.chart { width: 100%; position: relative; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { fill: var(--ink-2); font: 12px var(--font); }
+.chart .tick text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .gridline { stroke: var(--grid); stroke-width: 1; }
+.chart .baseline { stroke: var(--axis); stroke-width: 1; }
+.chart .ref { stroke: var(--ink-2); stroke-width: 1; }
+.chart .value-label { fill: var(--ink); font-weight: 600; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: .82rem; color: var(--ink-2); margin: 2px 0 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+#tooltip { position: fixed; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+           box-shadow: 0 4px 18px rgba(0,0,0,.12); border-radius: 8px; padding: 7px 10px; font-size: .82rem; max-width: 300px;
+           opacity: 0; transition: opacity .08s; z-index: 50; }
+#tooltip b { font-weight: 600; }
+details.table-view { margin-top: 8px; }
+details.table-view summary { cursor: pointer; color: var(--muted); font-size: .82rem; }
+
+.callout { background: var(--surface-2); border-radius: var(--radius); padding: 12px 16px; margin: 12px 0; }
+.callout.warn { border-left: 3px solid var(--warning); }
+ol.findings li { margin-bottom: .55em; }
+footer { color: var(--muted); font-size: .8rem; text-align: center; padding: 30px 0; }
+
+@media (max-width: 760px) {
+  main { padding: 18px 16px 40px; }
+  .top-inner { padding: 10px 16px; gap: 8px; }
+  .brand span { display: none; }
+  button.theme { margin-left: auto; }
+  nav.tabs { order: 3; flex: 1 0 100%; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
+  nav.tabs a { white-space: nowrap; }
+  h1 { font-size: 1.3rem; }
+}
+
+/* ---- deliverable buttons on each pulse page */
+.pulse-head h1 { margin-bottom: .2em; }
+.pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 18px; padding: 4px; background: var(--surface-2); border-radius: 10px; }
+.pills a.pill { text-decoration: none; color: var(--ink-2); padding: 7px 14px; border-radius: 7px; font-size: .9rem; white-space: nowrap; }
+.pills a.pill:hover { color: var(--ink); background: var(--surface); }
+.pills a.pill.active { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.grid.g2 > .card, .grid.g3 > .card { margin: 0; }
+details.card summary { cursor: pointer; padding: 2px 0 8px; }
+.question.small { font-size: .95rem; margin-top: 0; }

@@ -1,12 +1,16 @@
-"""Pulse 3 (Wellbeing): Student mental health and behavioral clustering.
-Datasets:
-- CDC YRBS (Youth Risk Behavior Survey): 10,710 respondents, behavioral questions.
-- Malaysia University Mental Health Survey: 101 respondents, course text variations.
-Signature challenge:
-- Skipped sensitive questions (missing not at random).
-- Dichotomous and ordinal coded survey responses.
-- 49 messy spellings/abbreviations of degree courses (fuzzy text normalization).
-Positive finding value = the claim holds.
+"""Pulse 3 (Wellbeing): which behaviours co-occur with persistent sadness?
+
+Datasets
+- CDC YRBS 2023, national high-school survey (20,103 students). Built by scripts/preprocess_yrbs.py,
+  which gives every question a plain column name (sad, sleep_hours, bullied_school, ...).
+- Malaysia university mental-health survey (101 students) with 49 messy spellings of course names.
+
+Main data challenges
+- Skipped answers: about 1% skip the sadness question but 13% skip sleep and 24% skip social media.
+- YRBS is a weighted sample, so unweighted rates are not national estimates.
+- Free-text course names need cleaning before any comparison by course.
+
+Every finding is a signed number; positive means the claim holds.
 """
 from __future__ import annotations
 import os
@@ -17,204 +21,175 @@ import pandas as pd
 from campuspulse.common.decisions import DecisionLog
 from campuspulse.common import stats_tests, reduce, clustering, rules
 
-PROCESSED = Path(__file__).resolve().parents[2] / "data" / "processed" / "wellbeing"
-RAW_MH = Path(__file__).resolve().parents[2] / "data" / "raw" / "student_mh"
+ROOT = Path(__file__).resolve().parents[2]
+YRBS_FILE = ROOT / "data" / "processed" / "wellbeing" / "yrbs_2023.csv"
+MALAYSIA_FILE = ROOT / "data" / "raw" / "student_mh" / "Student Mental health.csv"
 
 DECISIONS = {
-    "missing_handling":     ["impute_mode", "drop", "indicator"],  # sensitive questions missingness
-    "sleep_cutoff":         ["less_than_7hrs", "less_than_6hrs"], # severity threshold for sleep deprivation
-    "course_standardization": ["fuzzy_canonical", "raw"],          # text normalization for Malaysia survey
+    "missing_handling":       ["drop", "impute_mode", "indicator"],   # skipped behaviour questions
+    "sleep_cutoff":           ["less_than_8hrs", "less_than_7hrs", "less_than_6hrs"],  # CDC uses < 8 h
+    "survey_weights":         ["weighted", "unweighted"],
+    "course_standardization": ["fuzzy_canonical", "raw"],             # Malaysia course text
 }
 
 FINDINGS = {
-    "W1": "Sleep-deprived students report higher persistent sadness than well-rested peers (rate difference)",
-    "W2": "Bullied students (school or electronic) report significantly higher sadness (rate difference)",
-    "W3": "Physical inactivity co-occurs with elevated persistent sadness (rate difference)",
+    "W1": "Sleep-deprived students report persistent sadness more often (rate difference)",
+    "W2": "Bullied students (at school or online) report persistent sadness more often (rate difference)",
+    "W3": "Physically inactive students (0 active days a week) report persistent sadness more often (rate difference)",
+    "W4": "Malaysia survey: course discipline is associated with depression (Cramer's V; exploratory, n=101)",
 }
+
+SLEEP_LIMIT = {"less_than_8hrs": 8, "less_than_7hrs": 7, "less_than_6hrs": 6}
+BEHAVIOUR_COLUMNS = ["sleep_hours", "bullied_school", "bullied_online", "active_days"]
 
 
 def load_raw() -> tuple[pd.DataFrame, pd.DataFrame]:
-    yrbs_file = PROCESSED / "yrbs_selected_questions.csv"
-    if not yrbs_file.exists():
-        yrbs_file = PROCESSED / "yrbs_xxhqn.csv"
-    if not yrbs_file.exists():
-        raise FileNotFoundError(f"YRBS processed data not found in {PROCESSED}")
-    
-    df_yrbs = pd.read_csv(yrbs_file)
-    
-    mh_file = RAW_MH / "Student Mental health.csv"
-    df_mh = pd.read_csv(mh_file) if mh_file.exists() else pd.DataFrame()
-    return df_yrbs, df_mh
+    if not YRBS_FILE.exists():
+        raise FileNotFoundError(f"{YRBS_FILE} not found. Run: python scripts/download_data.py --pulse yrbs "
+                                f"then python scripts/preprocess_yrbs.py")
+    malaysia = pd.read_csv(MALAYSIA_FILE) if MALAYSIA_FILE.exists() else pd.DataFrame()
+    return pd.read_csv(YRBS_FILE), malaysia
 
 
 def normalize_courses(series: pd.Series) -> pd.Series:
-    """Fuzzy/canonical mapping for 49 disparate course strings in Malaysia survey (L9)."""
-    def _map(val):
-        if not isinstance(val, str):
+    """Map 49 free-text course spellings to 7 disciplines with keyword rules (L9 text features)."""
+    rules_by_discipline = [
+        ("Engineering", ["engin", "koe", "enm", "benl"]),
+        ("Computing & IT", ["bit", "bcs", "it", "cts", "mathem"]),
+        ("Law", ["law"]),
+        ("Islamic Studies", ["islam", "irkhs", "kirkhs", "usuluddin", "taasl", "fiqh"]),
+        ("Business & Economics", ["kenms", "account", "bank", "business", "econ"]),
+        ("Health & Life Sciences", ["nurs", "biomed", "biotech", "radio", "marine"]),
+        ("Humanities & Social Sciences", ["psych", "human", "comm", "malcom", "mhsc", "ala", "kop", "tesl"]),
+    ]
+
+    def to_discipline(text):
+        if not isinstance(text, str):
             return "Other"
-        s = val.strip().lower()
-        if any(k in s for k in ["engin", "koe", "enm", "benl"]):
-            return "Engineering"
-        if any(k in s for k in ["bit", "bcs", "it", "cts", "mathem"]):
-            return "Computing & IT"
-        if any(k in s for k in ["law"]):
-            return "Law"
-        if any(k in s for k in ["islam", "irkhs", "kirkhs", "usuluddin", "taasl", "fiqh"]):
-            return "Islamic Studies"
-        if any(k in s for k in ["kenms", "account", "bank", "business", "econ"]):
-            return "Business & Economics"
-        if any(k in s for k in ["nurs", "biomed", "biotech", "radio", "marine"]):
-            return "Health & Life Sciences"
-        if any(k in s for k in ["psych", "human", "comm", "malcom", "mhsc", "ala", "kop", "tesl"]):
-            return "Humanities & Social Sciences"
+        text = text.strip().lower()
+        for discipline, keywords in rules_by_discipline:
+            if any(k in text for k in keywords):
+                return discipline
         return "Other"
 
-    return series.apply(_map)
+    return series.apply(to_discipline)
 
 
 def clean(decisions: dict, log: DecisionLog | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-    def _val(k, default):
-        v = decisions.get(k, default)
-        return v[0] if isinstance(v, list) else v
-
     log = log if log is not None else DecisionLog()
-    df_yrbs, df_mh = load_raw()
-    n_yrbs = len(df_yrbs)
-    log.step("load_raw", 0, n_yrbs, "Loaded CDC YRBS survey and Malaysia MH dataset")
+    decisions = {k: (v[0] if isinstance(v, list) else v) for k, v in decisions.items()}   # accept DECISIONS itself
+    yrbs, malaysia = load_raw()
+    log.step("load_raw", 0, len(yrbs), "CDC YRBS 2023 national high-school survey")
 
-    # 1. Missing handling on YRBS
-    missing_mode = _val("missing_handling", "impute_mode")
-    key_cols = ["q26", "q88", "q23", "q24", "q79"]
-    target_col = "q26"  # 1 = Sad, 2 = Not sad
+    # 1. The outcome must be answered
+    before = len(yrbs)
+    yrbs = yrbs[yrbs["sad"].isin([1, 2])].copy()
+    log.step("answered_sadness_question", before, len(yrbs), "Kept students who answered the sadness question", "required")
 
-    # Filter invalid target responses first
-    valid_mask = df_yrbs[target_col].isin([1, 2])
-    before = len(df_yrbs)
-    df_yrbs = df_yrbs[valid_mask].copy()
-    log.step("filter_valid_target", before, len(df_yrbs), "Retained respondents who answered sadness question (q26)", "valid_target")
+    # 2. Skipped behaviour questions
+    mode = decisions.get("missing_handling", "drop")
+    before = len(yrbs)
+    if mode == "drop":
+        yrbs = yrbs.dropna(subset=BEHAVIOUR_COLUMNS).copy()
+        why = "Kept only students who answered every behaviour question (complete cases)"
+    else:
+        for col in BEHAVIOUR_COLUMNS:
+            if mode == "indicator":
+                yrbs[col + "_skipped"] = yrbs[col].isna().astype(int)
+            yrbs[col] = yrbs[col].fillna(yrbs[col].mode().iloc[0])
+        why = "Filled skipped answers with the most common answer" + (" and added a 'skipped' flag" if mode == "indicator" else "")
+    log.step("skipped_answers", before, len(yrbs), why, mode)
 
-    if missing_mode == "drop":
-        before = len(df_yrbs)
-        df_yrbs = df_yrbs.dropna(subset=key_cols).copy()
-        log.step("drop_missing_sensitive", before, len(df_yrbs), "Complete case analysis: dropped rows with missing sensitive behaviors", "drop")
-    elif missing_mode == "indicator":
-        for col in key_cols:
-            df_yrbs[f"{col}_missing"] = df_yrbs[col].isna().astype(int)
-            mode_val = df_yrbs[col].mode().iloc[0]
-            df_yrbs[col] = df_yrbs[col].fillna(mode_val)
-        log.step("missing_indicator_mode", len(df_yrbs), len(df_yrbs), "Created missingness indicator columns and imputed mode", "indicator")
-    else:  # impute_mode
-        for col in key_cols:
-            mode_val = df_yrbs[col].mode().iloc[0]
-            df_yrbs[col] = df_yrbs[col].fillna(mode_val)
-        log.step("impute_mode", len(df_yrbs), len(df_yrbs), "Imputed mode for missing responses on sensitive questions", "impute_mode")
+    # 3. Readable 0/1 indicators
+    limit = SLEEP_LIMIT[decisions.get("sleep_cutoff", "less_than_8hrs")]
+    yrbs["sadness"] = (yrbs["sad"] == 1).astype(int)
+    yrbs["sleep_deprived"] = (yrbs["sleep_hours"] < limit).astype(int)
+    yrbs["bullied"] = ((yrbs["bullied_school"] == 1) | (yrbs["bullied_online"] == 1)).astype(int)
+    yrbs["inactive"] = (yrbs["active_days"] == 0).astype(int)
+    yrbs["heavy_social_media"] = (yrbs["social_media_code"] >= 6).astype(int)   # several times a day or more
+    yrbs["female"] = (yrbs["sex"] == 1).astype(int)
+    log.step("indicators", len(yrbs), len(yrbs), f"sleep_deprived = fewer than {limit} hours on a school night", "derived")
 
-    df_yrbs["sadness"] = (df_yrbs["q26"] == 1).astype(int)
+    # 4. Survey weights
+    if decisions.get("survey_weights", "weighted") == "weighted":
+        yrbs["w"] = yrbs["weight"].fillna(0)
+        log.step("survey_weights", len(yrbs), len(yrbs), "Rates weighted with the CDC 'weight' column", "weighted")
+    else:
+        yrbs["w"] = 1.0
+        log.step("survey_weights", len(yrbs), len(yrbs), "Unweighted sample rates", "unweighted")
 
-    # 2. Sleep cutoff
-    sleep_mode = _val("sleep_cutoff", "less_than_7hrs")
-    if sleep_mode == "less_than_6hrs":
-        df_yrbs["sleep_deprived"] = df_yrbs["q88"].isin([3, 4, 5]).astype(int)
-    else:  # less_than_7hrs
-        df_yrbs["sleep_deprived"] = df_yrbs["q88"].isin([2, 3, 4, 5]).astype(int)
-
-    df_yrbs["bullied"] = ((df_yrbs["q23"] == 1) | (df_yrbs["q24"] == 1)).astype(int)
-    df_yrbs["inactive"] = (df_yrbs["q79"] == 1).astype(int)
-
-    # 3. Malaysia Course standardization
-    if not df_mh.empty and "What is your course?" in df_mh.columns:
-        course_mode = _val("course_standardization", "fuzzy_canonical")
-        if course_mode == "fuzzy_canonical":
-            df_mh["course_clean"] = normalize_courses(df_mh["What is your course?"])
-            log.step("normalize_course_text", len(df_mh), len(df_mh), "Normalized 49 messy course variations into 7 academic disciplines", "fuzzy_canonical")
+    # 5. Malaysia course text
+    if not malaysia.empty:
+        if decisions.get("course_standardization", "fuzzy_canonical") == "fuzzy_canonical":
+            malaysia["course_clean"] = normalize_courses(malaysia["What is your course?"])
+            why = "49 course spellings mapped to 7 disciplines"
         else:
-            df_mh["course_clean"] = df_mh["What is your course?"].astype(str).str.strip()
-            log.step("keep_raw_course_text", len(df_mh), len(df_mh), "Retained raw course strings without fuzzy canonical grouping", "raw")
+            malaysia["course_clean"] = malaysia["What is your course?"].astype(str).str.strip()
+            why = "Raw course text kept"
+        log.step("course_text", len(malaysia), len(malaysia), why, decisions.get("course_standardization", "fuzzy_canonical"))
+    return yrbs, malaysia
 
-    return df_yrbs, df_mh
+
+def sadness_rate(df: pd.DataFrame, mask) -> float:
+    """Weighted share of students reporting persistent sadness within a group."""
+    group = df[mask]
+    return float(np.average(group["sadness"], weights=group["w"])) if group["w"].sum() > 0 else float("nan")
+
+
+def course_depression_association(malaysia: pd.DataFrame) -> dict:
+    """Cramer's V between course and depression. Raw text has ~48 tiny groups, which inflates V by sparsity alone."""
+    if malaysia.empty or "course_clean" not in malaysia:
+        return dict(cramers_v=float("nan"), p=float("nan"), n_groups=0)
+    depressed = malaysia["Do you have Depression?"].eq("Yes").astype(int)
+    r = stats_tests.chi2_test(malaysia["course_clean"], depressed)
+    return dict(cramers_v=float(r["cramers_v"]), p=float(r["p"]), n_groups=int(malaysia["course_clean"].nunique()))
 
 
 def run_pipeline(decisions: dict) -> dict[str, float]:
-    df_yrbs, _ = clean(decisions)
-
-    # W1: Sleep deprivation vs well-rested
-    s_dep = df_yrbs.loc[df_yrbs["sleep_deprived"] == 1, "sadness"].mean()
-    s_rest = df_yrbs.loc[df_yrbs["sleep_deprived"] == 0, "sadness"].mean()
-    w1 = float(s_dep - s_rest)
-
-    # W2: Bullied vs non-bullied
-    b_yes = df_yrbs.loc[df_yrbs["bullied"] == 1, "sadness"].mean()
-    b_no = df_yrbs.loc[df_yrbs["bullied"] == 0, "sadness"].mean()
-    w2 = float(b_yes - b_no)
-
-    # W3: Inactivity vs activity
-    inact = df_yrbs.loc[df_yrbs["inactive"] == 1, "sadness"].mean()
-    act = df_yrbs.loc[df_yrbs["inactive"] == 0, "sadness"].mean()
-    w3 = float(inact - act)
-
-    return {"W1": w1, "W2": w2, "W3": w3}
-
-
-def run_stats(df_yrbs: pd.DataFrame) -> dict:
-    """Hypothesis tests with Bonferroni correction: chi2, two proportion z, Cramér's V."""
-    t_sleep = stats_tests.chi2_test(df_yrbs["sleep_deprived"], df_yrbs["sadness"])
-    t_bully = stats_tests.chi2_test(df_yrbs["bullied"], df_yrbs["sadness"])
-    t_inact = stats_tests.chi2_test(df_yrbs["inactive"], df_yrbs["sadness"])
-    
-    # Bonferroni multiple testing adjustment
-    p_vals = [t_sleep["p"], t_bully["p"], t_inact["p"]]
-    bonf = stats_tests.bonferroni(p_vals)
-
-    return {"sleep_chi2": t_sleep, "bully_chi2": t_bully, "inactivity_chi2": t_inact, "bonferroni": bonf}
-
-
-def get_behavior_matrix(df_yrbs: pd.DataFrame) -> pd.DataFrame:
-    """Shape transformation: extract binary behavioral risk factors (L11)."""
-    cols = ["sleep_deprived", "bullied", "inactive"]
-    extra_cols = [c for c in ["q80", "q40", "q41"] if c in df_yrbs.columns]
-    matrix = df_yrbs[cols + extra_cols].fillna(0)
-    return pd.get_dummies(matrix)
-
-
-def run_decomposition(df_yrbs: pd.DataFrame, n_components: int = 2) -> dict:
-    """Run PCA, TruncatedSVD, and t-SNE on behavioral risk factors (L12-14)."""
-    X = get_behavior_matrix(df_yrbs)
-    pca_pts, pca_var, _ = reduce.pca(X, n=n_components)
-    svd_pts, svd_var, _ = reduce.svd(X, n=n_components)
-    n_sample = min(600, len(X))
-    sample_idx = X.sample(n_sample, random_state=0).index
-    tsne_pts = reduce.tsne(X.loc[sample_idx], perplexity=25)
+    d, malaysia = clean(decisions)
     return {
-        "pca_pts": pca_pts,
-        "pca_variance": pca_var,
-        "svd_pts": svd_pts,
-        "svd_variance": svd_var,
-        "tsne_pts": tsne_pts,
-        "sample_idx": sample_idx,
+        "W1": sadness_rate(d, d["sleep_deprived"] == 1) - sadness_rate(d, d["sleep_deprived"] == 0),
+        "W2": sadness_rate(d, d["bullied"] == 1) - sadness_rate(d, d["bullied"] == 0),
+        "W3": sadness_rate(d, d["inactive"] == 1) - sadness_rate(d, d["inactive"] == 0),
+        "W4": course_depression_association(malaysia)["cramers_v"],
     }
 
 
-def run_clustering(df_yrbs: pd.DataFrame, k: int = 4) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Cluster students into behavioral risk profiles (L19-21): healthy, isolated/bullied, exhausted, high-risk."""
-    X = get_behavior_matrix(df_yrbs)
-    n_sample = min(1200, len(X))
-    sub_X = X.iloc[:n_sample]
-    metrics, labels = clustering.run_all(sub_X.values, k=k)
-    km_labels = labels["kmeans"]
-    sub_df = df_yrbs.iloc[:n_sample].copy()
-    sub_df["risk_cluster"] = km_labels
-    profiles = sub_df.groupby("risk_cluster").agg(
-        size=("sadness", "count"),
-        sadness_rate=("sadness", "mean"),
-        sleep_deprived_rate=("sleep_deprived", "mean"),
-        bullied_rate=("bullied", "mean"),
-        inactive_rate=("inactive", "mean"),
-    ).round(3)
+def run_stats(d: pd.DataFrame) -> dict:
+    """Chi-square tests (unweighted counts) with Bonferroni correction."""
+    tests = {name: stats_tests.chi2_test(d[col], d["sadness"])
+             for name, col in [("sleep_chi2", "sleep_deprived"), ("bully_chi2", "bullied"),
+                               ("inactivity_chi2", "inactive"), ("social_media_chi2", "heavy_social_media")]}
+    tests["bonferroni"] = stats_tests.bonferroni([t["p"] for t in tests.values()])
+    return tests
+
+
+def get_behavior_matrix(d: pd.DataFrame) -> pd.DataFrame:
+    """One row per student, one 0/1 column per behaviour (L11 shape transformation)."""
+    return d[["sleep_deprived", "bullied", "inactive", "heavy_social_media", "female"]].astype(float)
+
+
+def run_decomposition(d: pd.DataFrame, n_components: int = 2) -> dict:
+    X = get_behavior_matrix(d)
+    pca_pts, pca_var, _ = reduce.pca(X, n=n_components)
+    svd_pts, svd_var, _ = reduce.svd(X, n=n_components)
+    sample_idx = clustering.sample_rows(X, 600).index
+    return {"pca_pts": pca_pts, "pca_variance": pca_var, "svd_pts": svd_pts, "svd_variance": svd_var,
+            "tsne_pts": reduce.tsne(X.loc[sample_idx], perplexity=25), "sample_idx": sample_idx}
+
+
+def run_clustering(d: pd.DataFrame, k: int = 4) -> tuple[pd.DataFrame, pd.DataFrame]:
+    X = clustering.sample_rows(get_behavior_matrix(d), 1200)
+    metrics, labels = clustering.run_all(X.values, k=k)
+    sample = d.loc[X.index].assign(group=labels["kmeans"])
+    profiles = sample.groupby("group").agg(
+        size=("sadness", "count"), sadness_rate=("sadness", "mean"), sleep_deprived_rate=("sleep_deprived", "mean"),
+        bullied_rate=("bullied", "mean"), inactive_rate=("inactive", "mean"),
+        heavy_social_media_rate=("heavy_social_media", "mean")).round(3)
     return metrics, profiles
 
 
-def mine_sadness_rules(df_yrbs: pd.DataFrame) -> pd.DataFrame:
-    """Apriori association rules linking behavior combinations to persistent sadness (L18)."""
-    cols = ["sleep_deprived", "bullied", "inactive", "sadness"]
-    onehot = df_yrbs[cols].astype(bool)
-    return rules.mine_rules(onehot, min_support=0.05, min_lift=1.1, min_conf=0.4, consequent_prefix="sadness")
+def mine_sadness_rules(d: pd.DataFrame) -> pd.DataFrame:
+    """Apriori: which combinations of behaviours go with persistent sadness? (L18)"""
+    items = d[["sleep_deprived", "bullied", "inactive", "heavy_social_media", "female", "sadness"]].astype(bool)
+    return rules.mine_rules(items, min_support=0.04, min_lift=1.1, min_conf=0.4, consequent_prefix="sadness")

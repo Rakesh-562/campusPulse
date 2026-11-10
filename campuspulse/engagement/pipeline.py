@@ -23,6 +23,7 @@ DECISIONS = {
     "click_smoothing": ["rolling_2wk", "raw", "exp_smoothing"],  # noise removal / smoothing
     "early_cutoff":    ["week_4", "week_2", "week_6"],          # early warning window
     "missing_scores":  ["impute_median", "impute_zero", "drop"],# missing assessment values
+    "already_left":    ["exclude", "include"],                  # students who left before the cutoff (leakage)
 }
 
 FINDINGS = {
@@ -69,6 +70,22 @@ def clean(decisions: dict, log: DecisionLog | None = None) -> pd.DataFrame:
     # 2. Early cutoff week selection
     cutoff_str = _val("early_cutoff", "week_4")
     cutoff_week = int(str(cutoff_str).split("_")[1])
+
+    # Leakage guard: a student who already unregistered before the cutoff has low clicks BECAUSE
+    # they left. Predicting their withdrawal from those clicks is circular, so drop them.
+    if "date_unregistration" in df.columns and _val("already_left", "exclude") == "exclude":
+        before = len(df)
+        left_early = pd.to_numeric(df["date_unregistration"], errors="coerce") < 7 * (cutoff_week + 1)
+        df = df[~left_early].copy()
+        log.step("drop_already_withdrawn", before, len(df),
+                 f"Removed students who unregistered before the end of week {cutoff_week} (outcome leakage)", "exclude")
+    elif "date_unregistration" in df.columns:
+        log.step("keep_already_withdrawn", len(df), len(df),
+                 "Kept students who had already left: their low clicks are a result of leaving, not a warning", "include")
+    else:
+        log.step("leakage_guard_unavailable", len(df), len(df),
+                 "WARNING: no date_unregistration column in the processed file; students who left before the "
+                 "cutoff are still included. Re-export it from studentRegistration.csv.", "leakage_guard")
     week_cols = [f"week_{w}" for w in range(cutoff_week + 1) if f"week_{w}" in df.columns]
 
     # 3. Smoothing of weekly clicks
@@ -165,12 +182,11 @@ def run_decomposition(df: pd.DataFrame, n_components: int = 2) -> dict:
 
 def run_clustering(df: pd.DataFrame, k: int = 4) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Cluster engagement trajectories into learner personas: steady, crammers, dropouts, lurkers (L19-21)."""
-    X = get_trajectory_matrix(df)
-    n_sample = min(1200, len(X))
-    sub_X = X.iloc[:n_sample]
+    # Random sample: the table is sorted by course module, so the first rows are almost all one course.
+    sub_X = clustering.sample_rows(get_trajectory_matrix(df), 1200)
     metrics, labels = clustering.run_all(sub_X.values, k=k)
     km_labels = labels["kmeans"]
-    sub_df = df.iloc[:n_sample].copy()
+    sub_df = df.loc[sub_X.index].copy()
     sub_df["trajectory_cluster"] = km_labels
     profiles = sub_df.groupby("trajectory_cluster").agg(
         size=("withdrawn", "count"),
@@ -192,3 +208,20 @@ def run_rules(df: pd.DataFrame) -> pd.DataFrame:
     }).dropna()
     onehot = pd.get_dummies(sub)
     return rules.mine_rules(onehot, min_support=0.05, min_lift=1.1, min_conf=0.4, consequent_prefix="withdrawn_withdrawn")
+
+
+def run_timeline(cutoffs=("week_2", "week_4", "week_6"), top_share: float = 0.25) -> pd.DataFrame:
+    """How early can we warn? Rank students by early clicks (fewest = highest risk) at each cutoff.
+    capture@25% = share of all withdrawals found by contacting the 25% least active students.
+    Same metric as campuspulse.academic.pipeline.run_timeline, so the two pulses can be plotted together."""
+    from sklearn.metrics import roc_auc_score
+    rows = []
+    for cut in cutoffs:
+        cfg = {**{k: v[0] for k, v in DECISIONS.items()}, "early_cutoff": cut}
+        d = clean(cfg)
+        y, risk = d["withdrawn"].values, -d["early_activity"].values
+        top = risk >= np.quantile(risk, 1 - top_share)
+        rows.append(dict(stage=cut, n_students=len(d), roc_auc=roc_auc_score(y, risk),
+                         capture_at_25pct=y[top].sum() / y.sum(), precision_at_25pct=y[top].mean(),
+                         max_possible_capture=min(1.0, top.sum() / y.sum())))
+    return pd.DataFrame(rows)

@@ -5,7 +5,7 @@ Signature challenge:
 - Aggregated sales (point-of-sale till records rather than tracked individuals).
 - Demand spikes and holidays (outliers vs authentic consumer demand).
 - Day-of-week seasonality (smoothing).
-- Randomized intervention design allowing causal inference.
+- Randomised field experiment (alternating weeks): the one pulse that supports cause-and-effect claims.
 Positive finding value = the claim holds.
 """
 from __future__ import annotations
@@ -21,16 +21,25 @@ RAW = Path(__file__).resolve().parents[2] / "data" / "raw" / "novanimal"
 PROCESSED = Path(__file__).resolve().parents[2] / "data" / "processed" / "food"
 
 DECISIONS = {
-    "outlier_filter":   ["filter_holidays", "raw_all_days", "trim_spikes"],  # demand outliers
-    "smoothing":        ["weekly_moving_avg", "raw"],                         # weekly seasonality
-    "customer_filter":  ["all_customers", "students_only", "staff_only"],     # patron subgroups
+    # Lecture 5 noise removal. Mon-Fri attendance swings (+-80 meals/day) are noise for this question.
+    "seasonality":     ["weekday_adjusted", "raw", "rolling_5day"],
+    # Lecture 6-7 outliers at DAY level: 2 days fall outside the IQR fences.
+    "outlier_filter":  ["keep", "iqr_drop_days", "winsorize_days"],
+    "customer_filter": ["all_customers", "students_only", "staff_only"],   # patron subgroups
 }
 
+# Non-inferiority margin, fixed BEFORE looking at results: intervention weeks may sell
+# at most 5% fewer meals per day than baseline weeks for us to call them "not worse".
+NI_MARGIN_PCT = 0.05
+
 FINDINGS = {
-    "F1": "Vegetarian intervention does not depress canteen volume (sales non-inferiority: daily sales diff >= 0)",
-    "F2": "Vegetarian meal choice share increases substantially during intervention weeks (share difference)",
-    "F3": "Students choose vegetarian meals at higher baseline rates than university staff (choice gap)",
+    "F1": "Vegetarian intervention weeks are non-inferior on daily sales (one-sided 95% lower bound of the "
+          "difference + 5% margin; > 0 means proven not worse)",
+    "F2": "Vegetarian/vegan share of meals rises in intervention weeks (share difference)",
+    "F3": "Students choose vegetarian/vegan meals more often than staff (share difference)",
 }
+
+VEG_LABELS = ["Vegetarisch", "Pflanzlich", "Pflanzlich+"]
 
 
 def load_raw() -> pd.DataFrame:
@@ -40,109 +49,128 @@ def load_raw() -> pd.DataFrame:
     csv_raw = RAW / "2017_ZHAW_aggregated_menu_sales_NOVANIMAL.csv"
     if csv_raw.exists():
         df = pd.read_csv(csv_raw, sep=";")
-        df["is_veg"] = df["label_content"].isin(["Vegetarisch", "Pflanzlich", "Pflanzlich+"]).astype(int)
+        df["is_veg"] = df["label_content"].isin(VEG_LABELS).astype(int)
         df["date"] = pd.to_datetime(df["date"])
         return df
     raise FileNotFoundError(f"NOVANIMAL dataset not found in {PROCESSED} or {RAW}")
 
 
-def clean(decisions: dict, log: DecisionLog | None = None) -> pd.DataFrame:
-    def _val(k, default):
-        v = decisions.get(k, default)
-        return v[0] if isinstance(v, list) else v
+def _val(decisions, k, default):
+    v = decisions.get(k, default)
+    return v[0] if isinstance(v, list) else v
 
+
+def _iqr_fences(s: pd.Series):
+    q1, q3 = s.quantile([0.25, 0.75])
+    return q1 - 1.5 * (q3 - q1), q3 + 1.5 * (q3 - q1)
+
+
+def clean(decisions: dict, log: DecisionLog | None = None) -> pd.DataFrame:
+    """Transaction-level cleaning. Day-level smoothing/winsorizing happens in daily_series()."""
     log = log if log is not None else DecisionLog()
     df = load_raw().copy()
-    n_init = len(df)
-    log.step("load_raw", 0, n_init, "Loaded NOVANIMAL field experiment till sales")
+    log.step("load_raw", 0, len(df), "Loaded NOVANIMAL field experiment till sales (2 canteens, 60 days)")
 
     # 1. Customer subgroup filter
-    cust_mode = _val("customer_filter", "all_customers")
+    cust_mode = _val(decisions, "customer_filter", "all_customers")
     before = len(df)
     if cust_mode == "students_only":
         df = df[df["rab_descript"] == "Studierende"].copy()
-        log.step("filter_students", before, len(df), "Filter to student transactions only", "students_only")
+        log.step("filter_students", before, len(df), "Student transactions only", "students_only")
     elif cust_mode == "staff_only":
         df = df[df["rab_descript"] == "Mitarbeiter"].copy()
-        log.step("filter_staff", before, len(df), "Filter to staff/employee transactions only", "staff_only")
+        log.step("filter_staff", before, len(df), "Staff transactions only", "staff_only")
     else:
-        log.step("all_customers", len(df), len(df), "Retain all canteen customer segments", "all_customers")
+        log.step("all_customers", before, len(df), "All customer groups kept", "all_customers")
 
-    # 2. Outlier and holiday filtering
-    outlier_mode = _val("outlier_filter", "filter_holidays")
-    daily_totals = df.groupby("date")["qty_weight"].sum()
-    if outlier_mode == "filter_holidays":
-        valid_dates = daily_totals[daily_totals >= 50].index
+    # 2. Day-level outliers (IQR on daily totals). Dropping removes whole days.
+    out_mode = _val(decisions, "outlier_filter", "keep")
+    daily_tot = df.groupby("date")["qty_weight"].sum()
+    lo, hi = _iqr_fences(daily_tot)
+    odd_days = daily_tot[(daily_tot < lo) | (daily_tot > hi)].index
+    if out_mode == "iqr_drop_days":
         before = len(df)
-        df = df[df["date"].isin(valid_dates)].copy()
-        log.step("filter_holidays", before, len(df), "Removed holiday and partial-operation days (<50 sales)", "filter_holidays")
-    elif outlier_mode == "trim_spikes":
-        q99 = df["qty_weight"].quantile(0.99)
-        df["qty_weight"] = df["qty_weight"].clip(upper=q99)
-        log.step("trim_spikes", len(df), len(df), f"Trimmed extreme meal item transaction spikes at 99th pct ({q99:.1f})", "trim_spikes")
+        df = df[~df["date"].isin(odd_days)].copy()
+        log.step("iqr_drop_days", before, len(df),
+                 f"Dropped {len(odd_days)} day(s) outside IQR fences [{lo:.0f}, {hi:.0f}] meals/day", "iqr_drop_days")
     else:
-        log.step("raw_days", len(df), len(df), "Kept all calendar days without holiday filtering", "raw_all_days")
+        log.step("flag_outlier_days", len(df), len(df),
+                 f"{len(odd_days)} day(s) outside IQR fences [{lo:.0f}, {hi:.0f}]: "
+                 f"{'kept as real demand' if out_mode == 'keep' else 'winsorized at day level'}", out_mode)
 
-    # 3. Weekly smoothing flag
-    smooth_mode = _val("smoothing", "weekly_moving_avg")
-    if smooth_mode == "weekly_moving_avg":
-        log.step("apply_weekly_smoothing", len(df), len(df), "Applied 5-day moving average to absorb weekday attendance variance", "weekly_moving_avg")
-    else:
-        log.step("raw_smoothing", len(df), len(df), "Retained raw daily sales without temporal convolution", "raw")
-
+    seas = _val(decisions, "seasonality", "weekday_adjusted")
+    log.step("seasonality", len(df), len(df), {
+        "weekday_adjusted": "Removed the weekday effect (each day minus its weekday mean); never mixes conditions",
+        "raw": "Raw daily totals",
+        "rolling_5day": "5-day rolling mean across dates: blends baseline and intervention days at week boundaries",
+    }[seas], seas)
     return df
+
+
+def daily_series(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
+    """One row per date: total meals, vegetarian share, condition, after the chosen transforms."""
+    d = df.assign(veg_qty=df["is_veg"] * df["qty_weight"]).groupby(["date", "condit"]).agg(
+        total_sales=("qty_weight", "sum"), veg_sales=("veg_qty", "sum")).reset_index().sort_values("date")
+    d["veg_share"] = d["veg_sales"] / d["total_sales"]
+
+    if _val(decisions, "outlier_filter", "keep") == "winsorize_days":
+        lo, hi = _iqr_fences(d["total_sales"])
+        d["total_sales"] = d["total_sales"].clip(lo, hi)
+
+    mode = _val(decisions, "seasonality", "weekday_adjusted")
+    if mode == "weekday_adjusted":
+        wd = d["date"].dt.dayofweek
+        for c in ["total_sales", "veg_share"]:
+            d[c] = d[c] - d.groupby(wd)[c].transform("mean") + d[c].mean()
+    elif mode == "rolling_5day":
+        for c in ["total_sales", "veg_share"]:
+            d[c] = d[c].rolling(5, min_periods=1).mean()
+    return d
+
+
+def non_inferiority(inter: pd.Series, basis: pd.Series, margin_pct: float = NI_MARGIN_PCT) -> dict:
+    """One-sided Welch non-inferiority test: H0 diff <= -margin vs H1 diff > -margin."""
+    from scipy import stats as _st
+    inter, basis = inter.dropna(), basis.dropna()
+    diff = inter.mean() - basis.mean()
+    v1, v2 = inter.var(ddof=1) / len(inter), basis.var(ddof=1) / len(basis)
+    se = np.sqrt(v1 + v2)
+    dof = (v1 + v2) ** 2 / (v1 ** 2 / (len(inter) - 1) + v2 ** 2 / (len(basis) - 1))
+    margin = margin_pct * basis.mean()
+    lower = diff - _st.t.ppf(0.95, dof) * se
+    t = (diff + margin) / se
+    return dict(diff=diff, se=se, lower_95=lower, margin=margin, t=t, p=_st.t.sf(t, dof),
+                non_inferior=bool(lower > -margin))
+
+
+def _veg_share(df: pd.DataFrame, group: str) -> float:
+    g = df[df["rab_descript"] == group]
+    return float((g["is_veg"] * g["qty_weight"]).sum() / g["qty_weight"].sum()) if len(g) else float("nan")
 
 
 def run_pipeline(decisions: dict) -> dict[str, float]:
     df = clean(decisions)
+    d = daily_series(df, decisions)
+    inter, basis = d["condit"] == "Intervention", d["condit"] == "Basis"
 
-    # Aggregate daily metrics
-    daily = df.groupby(["date", "condit"]).agg(
-        total_sales=("qty_weight", "sum"),
-        veg_sales=("is_veg", lambda s: (s * df.loc[s.index, "qty_weight"]).sum()),
-    ).reset_index()
-    daily["veg_share"] = daily["veg_sales"] / daily["total_sales"]
-
-    smooth_mode = decisions.get("smoothing", "weekly_moving_avg")
-    if smooth_mode == "weekly_moving_avg":
-        daily["total_sales"] = daily["total_sales"].rolling(5, min_periods=1).mean()
-        daily["veg_share"] = daily["veg_share"].rolling(5, min_periods=1).mean()
-
-    # F1: Non-inferiority: Intervention sales should not fall below Basis sales
-    mean_sales_inter = daily.loc[daily["condit"] == "Intervention", "total_sales"].mean()
-    mean_sales_basis = daily.loc[daily["condit"] == "Basis", "total_sales"].mean()
-    f1 = float((mean_sales_inter - mean_sales_basis) + 25.0)
-
-    # F2: Vegetarian choice share increase in intervention weeks
-    share_inter = daily.loc[daily["condit"] == "Intervention", "veg_share"].mean()
-    share_basis = daily.loc[daily["condit"] == "Basis", "veg_share"].mean()
-    f2 = float(share_inter - share_basis)
-
-    # F3: Student vs Staff vegetarian choice gap
-    raw_df = load_raw()
-    stud_veg = (raw_df.loc[raw_df["rab_descript"] == "Studierende", "is_veg"] * raw_df.loc[raw_df["rab_descript"] == "Studierende", "qty_weight"]).sum() / raw_df.loc[raw_df["rab_descript"] == "Studierende", "qty_weight"].sum()
-    staff_veg = (raw_df.loc[raw_df["rab_descript"] == "Mitarbeiter", "is_veg"] * raw_df.loc[raw_df["rab_descript"] == "Mitarbeiter", "qty_weight"]).sum() / raw_df.loc[raw_df["rab_descript"] == "Mitarbeiter", "qty_weight"].sum()
-    f3 = float(stud_veg - staff_veg)
-
+    ni = non_inferiority(d.loc[inter, "total_sales"], d.loc[basis, "total_sales"])
+    f1 = float(ni["lower_95"] + ni["margin"])                       # > 0  <=>  non-inferior
+    f2 = float(d.loc[inter, "veg_share"].mean() - d.loc[basis, "veg_share"].mean())
+    f3 = _veg_share(df, "Studierende") - _veg_share(df, "Mitarbeiter")  # NaN if a group was filtered out
     return {"F1": f1, "F2": f2, "F3": f3}
 
 
-def run_stats(df: pd.DataFrame) -> dict:
-    """Welch t-test and effect sizes for randomized field intervention (L3-4)."""
-    daily = df.groupby(["date", "condit"]).agg(
-        total_sales=("qty_weight", "sum"),
-        veg_share=("is_veg", lambda s: (s * df.loc[s.index, "qty_weight"]).sum() / df.loc[s.index, "qty_weight"].sum()),
-    ).reset_index()
-
-    t_sales = stats_tests.welch_t(
-        daily.loc[daily["condit"] == "Intervention", "total_sales"],
-        daily.loc[daily["condit"] == "Basis", "total_sales"],
-    )
-    t_share = stats_tests.welch_t(
-        daily.loc[daily["condit"] == "Intervention", "veg_share"],
-        daily.loc[daily["condit"] == "Basis", "veg_share"],
-    )
-    return {"sales_t": t_sales, "veg_share_t": t_share}
+def run_stats(df: pd.DataFrame, decisions: dict | None = None) -> dict:
+    """Randomised field experiment: non-inferiority on sales, Welch t on veg share, chi-square on groups."""
+    decisions = decisions or {k: v[0] for k, v in DECISIONS.items()}
+    d = daily_series(df, decisions)
+    inter, basis = d["condit"] == "Intervention", d["condit"] == "Basis"
+    t_sales = stats_tests.welch_t(d.loc[inter, "total_sales"], d.loc[basis, "total_sales"])
+    t_share = stats_tests.welch_t(d.loc[inter, "veg_share"], d.loc[basis, "veg_share"])
+    ni = non_inferiority(d.loc[inter, "total_sales"], d.loc[basis, "total_sales"])
+    groups = df[df["rab_descript"].isin(["Studierende", "Mitarbeiter"])]
+    chi_group = stats_tests.chi2_test(groups["rab_descript"], groups["is_veg"]) if len(groups) else {}
+    return {"sales_t": t_sales, "veg_share_t": t_share, "sales_non_inferiority": ni, "group_veg_chi2": chi_group}
 
 
 def extract_menu_text_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -186,6 +214,14 @@ def run_clustering(df: pd.DataFrame, k: int = 3) -> tuple[pd.DataFrame, pd.DataF
 
 def mine_food_rules(df: pd.DataFrame) -> pd.DataFrame:
     """Apriori rules linking meal attributes and customer segments to vegetarian selection (L18)."""
-    meal_records = df[["label_content", "rab_descript", "condit"]].dropna()
+    # One transaction per till record; the target is a single item "choice_veg" (vegetarian OR vegan),
+    # so the three plant-based labels are not split into three weaker items.
+    meal_records = pd.DataFrame({
+        "week": df["condit"].map({"Basis": "baseline", "Intervention": "intervention"}),
+        "customer": df["rab_descript"].map({"Studierende": "student", "Mitarbeiter": "staff"}).fillna("other"),
+        "canteen": df["shop_description"].astype(str) if "shop_description" in df else "all",
+        "day": df["date"].dt.day_name().str[:3],
+        "choice": np.where(df["is_veg"] == 1, "veg", "not_veg"),
+    }).dropna()
     onehot = pd.get_dummies(meal_records)
-    return rules.mine_rules(onehot, min_support=0.04, min_lift=1.1, min_conf=0.3, consequent_prefix="label_content_Vegetarisch")
+    return rules.mine_rules(onehot, min_support=0.03, min_lift=1.1, min_conf=0.4, consequent_prefix="choice_veg")

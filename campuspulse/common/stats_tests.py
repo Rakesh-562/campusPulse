@@ -33,3 +33,11 @@ def chi2_test(x, y):
 def bonferroni(pvalues, alpha=0.05):
     pv = np.asarray(pvalues, float)
     return pd.DataFrame(dict(p=pv, p_adj=np.minimum(pv * len(pv), 1), significant=pv * len(pv) < alpha))
+
+
+def conclude(p: float, if_significant: str, alpha: float = 0.05, n_tests: int = 1) -> str:
+    """Decision sentence computed from the p-value (Bonferroni for n_tests), never hard-coded."""
+    a = alpha / n_tests
+    if p < a:
+        return f"DECISION: reject H0 (p = {p:.2e} < {a:.3g}). {if_significant}"
+    return f"DECISION: fail to reject H0 (p = {p:.2e} >= {a:.3g}). No evidence for: {if_significant}"

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CampusPulse</title>
+  <meta name="description" content="Five real campus datasets, one shared method: logged cleaning decisions and a robustness check on every finding.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="top-inner">
+      <a class="brand" href="#/">CampusPulse <span>· five vital signs of a campus</span></a>
+      <nav class="tabs" id="tabs" aria-label="Sections"></nav>
+      <button class="theme" id="theme" type="button" aria-label="Toggle dark mode">Light / dark</button>
+    </div>
+  </header>
+  <main id="app"><p class="muted">Loading…</p></main>
+  <footer>All numbers are computed by the CampusPulse pipelines (<code>scripts/export_dashboard_data.py</code>); nothing on this page is typed in by hand.</footer>
+  <div id="tooltip" role="tooltip"></div>
+  <script src="data.js"></script>
+  <script src="charts.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

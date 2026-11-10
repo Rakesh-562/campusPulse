@@ -1,11 +1,18 @@
-"""Pulse 5 (Energy): Campus building behaviour & anomaly detection.
-Dataset: I-BLEND (IIIT Delhi smart campus) - 52 months of multi-building power telemetry.
-Signature challenge:
-- Sensor dropouts and meter gaps (missing data).
-- Transient spikes (electrical noise vs authentic institute events).
-- 1-minute to hourly/daily resampling and alignment with institute academic calendar.
-- Hostel late-night energy (00:00-05:00) during exams as a campus-wide proxy for sleep/stress.
-Positive finding value = the claim holds.
+"""Pulse 5 (Energy): when does a campus building behave differently, and why?
+
+Dataset: I-BLEND, IIIT Delhi (India). 52 months of electricity use for 9 meters, plus the institute calendar.
+Built by scripts/preprocess_iblend.py into one row per hour.
+
+What the calendar can and cannot tell us
+- It marks each day as a teaching day (H) or a low-activity day (L: weekends, holidays, vacations).
+- It does NOT mark exam days, so this pulse makes no claim about exams.
+
+Main data challenges
+- Meter gaps: the hostel meters sent no reading in about 25% of hours.
+- Spikes: are very high readings glitches or real events?
+- Season: Delhi's long vacation is also its hottest season (air-conditioning), which can fake a "term" effect.
+
+Every finding is a signed number; positive means the claim holds.
 """
 from __future__ import annotations
 import os
@@ -15,199 +22,180 @@ import numpy as np
 import pandas as pd
 from campuspulse.common.decisions import DecisionLog
 from campuspulse.common import stats_tests, reduce, clustering, rules
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
 
-RAW = Path(__file__).resolve().parents[2] / "data" / "raw" / "iblend" / "energy_dataset"
-PROCESSED = Path(__file__).resolve().parents[2] / "data" / "processed" / "energy"
+DATA_FILE = Path(__file__).resolve().parents[2] / "data" / "processed" / "energy" / "hourly_campus_power.csv"
+METERS = ["Academic", "Lecture", "Library", "Mess", "Facilities", "Boys_main", "Boys_backup", "Girls_main",
+          "Girls_backup", "total_hostel_power", "total_campus_power"]
 
 DECISIONS = {
-    "spike_handling":        ["clip_99th", "keep_raw", "rolling_median"],  # outlier filtering
-    "meter_gap_imputation": ["linear_interpolate", "forward_fill", "drop"], # missing data handling
-    "resample_freq":         ["1h", "2h", "daily"],                         # temporal resolution
+    "meter_gap_imputation": ["drop", "linear_interpolate", "forward_fill"],   # hours with no reading
+    "spike_handling":       ["keep_raw", "clip_99th", "rolling_median"],      # very high readings
+    "resample_freq":        ["1h", "daily"],                                  # time resolution
 }
 
 FINDINGS = {
-    "EN1": "Hostel late-night (00:00–05:00) energy consumption surges significantly during exam weeks (Watts difference)",
-    "EN2": "Academic facility consumption on weekdays significantly exceeds weekend baseline (Watts surplus)",
-    "EN3": "Daily load shape reconstruction error distinguishes anomalous days from regular academic schedules (residual gap)",
+    "EN1": "The academic building draws more power on teaching days than on low-activity days (daytime 9:00-18:00, W)",
+    "EN2": "Hostels draw more power at night (00:00-05:00) in term than in vacation (raw comparison, W)",
+    "EN3": "The term-vs-vacation night difference survives comparing only within the same calendar month (season removed, W)",
 }
 
 
 def load_raw() -> pd.DataFrame:
-    parquet_path = PROCESSED / "hourly_campus_power.parquet"
-    if parquet_path.exists():
-        df = pd.read_parquet(parquet_path)
-        df["datetime"] = pd.to_datetime(df["datetime"])
-        return df
-    csv_path = PROCESSED / "hourly_campus_power.csv"
-    if csv_path.exists():
-        df = pd.read_csv(csv_path)
-        df["datetime"] = pd.to_datetime(df["datetime"])
-        return df
-    raise FileNotFoundError(f"Processed energy data not found in {PROCESSED}")
+    if not DATA_FILE.exists():
+        raise FileNotFoundError(f"{DATA_FILE} not found. Run: python scripts/download_data.py --pulse iblend "
+                                f"then python scripts/preprocess_iblend.py")
+    df = pd.read_csv(DATA_FILE)
+    df["datetime"] = pd.to_datetime(df["datetime"], utc=True).dt.tz_convert("Asia/Kolkata")
+    return df
 
 
 def clean(decisions: dict, log: DecisionLog | None = None) -> pd.DataFrame:
-    def _val(k, default):
-        v = decisions.get(k, default)
-        return v[0] if isinstance(v, list) else v
-
     log = log if log is not None else DecisionLog()
-    df = load_raw().copy()
-    n_init = len(df)
-    log.step("load_hourly_telemetry", 0, n_init, "Loaded 52-month hourly campus building energy telemetry")
+    decisions = {k: (v[0] if isinstance(v, list) else v) for k, v in decisions.items()}   # accept DECISIONS itself
+    df = load_raw()
+    meters = [m for m in METERS if m in df.columns]
+    log.step("load_hourly", 0, len(df), "Hourly mean power per meter, Aug 2013 - Dec 2017")
 
-    power_cols = ["Academic", "Boys_main", "Boys_backup", "Girls_main", "Girls_backup", "total_hostel_power", "total_campus_power"]
-
-    # 1. Spike / Outlier handling
-    spike_mode = _val("spike_handling", "clip_99th")
-    if spike_mode == "clip_99th":
-        for col in power_cols:
-            if col in df.columns:
-                q99 = df[col].quantile(0.99)
-                df[col] = df[col].clip(upper=q99)
-        log.step("clip_99th_spikes", len(df), len(df), "Clipped transient electrical sensor spikes at 99th percentile", "clip_99th")
-    elif spike_mode == "rolling_median":
-        for col in power_cols:
-            if col in df.columns:
-                df[col] = df[col].rolling(3, min_periods=1, center=True).median()
-        log.step("rolling_median_filter", len(df), len(df), "Applied 3-hour rolling median filter for spike suppression", "rolling_median")
-    else:
-        log.step("keep_raw_spikes", len(df), len(df), "Retained raw power readings without clipping sensor outliers", "keep_raw")
-
-    # 2. Meter gap imputation
-    impute_mode = _val("meter_gap_imputation", "linear_interpolate")
+    # 1. Meter gaps
+    gap_mode = decisions.get("meter_gap_imputation", "drop")
     before = len(df)
-    if impute_mode == "drop":
+    if gap_mode == "drop":
         df = df.dropna(subset=["Academic", "total_hostel_power"]).copy()
-        log.step("drop_meter_gaps", before, len(df), "Dropped hours with missing meter readings (complete cases only)", "drop")
-    elif impute_mode == "forward_fill":
-        df[power_cols] = df[power_cols].ffill().bfill()
-        log.step("ffill_meter_gaps", len(df), len(df), "Forward-filled intermittent meter dropouts", "forward_fill")
-    else:  # linear_interpolate
-        df[power_cols] = df[power_cols].interpolate(method="linear").bfill().ffill()
-        log.step("linear_interpolate_gaps", len(df), len(df), "Linearly interpolated meter communication dropouts", "linear_interpolate")
+        why = "Dropped hours where the academic or any hostel meter sent no reading"
+    elif gap_mode == "linear_interpolate":
+        df[meters] = df[meters].interpolate(limit_direction="both")
+        why = "Filled gaps by drawing a straight line between the readings on either side"
+    else:
+        df[meters] = df[meters].ffill().bfill()
+        why = "Filled gaps by repeating the last reading"
+    log.step("meter_gaps", before, len(df), why, gap_mode)
 
-    # 3. Resampling frequency
-    freq_mode = _val("resample_freq", "1h")
-    if freq_mode != "1h":
-        df = df.set_index("datetime")
-        resampled_num = df[power_cols].resample("2h" if freq_mode == "2h" else "1D").mean()
-        resampled_cat = df[["is_exam", "is_weekend", "is_late_night"]].resample("2h" if freq_mode == "2h" else "1D").max()
-        df = pd.concat([resampled_num, resampled_cat], axis=1).reset_index()
-        log.step(f"resample_{freq_mode}", before, len(df), f"Resampled temporal resolution to {freq_mode}", freq_mode)
+    # 2. Spikes
+    spike_mode = decisions.get("spike_handling", "keep_raw")
+    if spike_mode == "clip_99th":
+        for m in meters:
+            df[m] = df[m].clip(upper=df[m].quantile(0.99))
+        why = "Capped every meter at its 99th percentile"
+    elif spike_mode == "rolling_median":
+        for m in meters:
+            df[m] = df[m].rolling(3, min_periods=1, center=True).median()
+        why = "Replaced each hour by the median of itself and its two neighbours"
+    else:
+        why = "Kept every reading: no evidence that the high values are glitches"
+    log.step("spikes", len(df), len(df), why, spike_mode)
 
+    # 3. Time resolution
+    if decisions.get("resample_freq", "1h") == "daily":
+        flags = ["is_teaching", "is_vacation", "is_weekend"]
+        df = (df.set_index("datetime")[meters + flags].resample("1D").mean().dropna(subset=["Academic"]).reset_index())
+        df[flags] = df[flags].round().astype(int)
+        log.step("resample_daily", before, len(df), "Averaged to one row per day (hour of day is lost)", "daily")
     return df
+
+
+def _mean(df, mask, column):
+    return float(df.loc[mask, column].mean())
+
+
+def night_rows(df):
+    """Hours 00:00-05:00, or every row when the data is daily (no hours left)."""
+    return df[df["is_late_night"] == 1] if "is_late_night" in df else df
+
+
+def term_vs_vacation_within_month(df: pd.DataFrame) -> tuple[float, pd.DataFrame]:
+    """Term minus vacation night-time hostel power inside each month that has both; weighted by vacation hours."""
+    nights = night_rows(df)
+    month = nights["datetime"].dt.strftime("%Y-%m")
+    rows = []
+    for m, g in nights.groupby(month):
+        term, vac = g[g["is_vacation"] == 0], g[g["is_vacation"] == 1]
+        if len(term) and len(vac):
+            rows.append(dict(month=m, term_rows=len(term), vacation_rows=len(vac),
+                             term_mean=term["total_hostel_power"].mean(), vacation_mean=vac["total_hostel_power"].mean(),
+                             diff=term["total_hostel_power"].mean() - vac["total_hostel_power"].mean()))
+    table = pd.DataFrame(rows)
+    if table.empty:
+        return float("nan"), table
+    return float(np.average(table["diff"], weights=table["vacation_rows"])), table
 
 
 def run_pipeline(decisions: dict) -> dict[str, float]:
     df = clean(decisions)
-
-    # EN1: Hostel late-night energy during exams vs normal weeks
-    if "is_late_night" in df.columns and (df["is_late_night"] == 1).any():
-        late_night = df[df["is_late_night"] == 1]
-        hostel_exam = late_night.loc[late_night["is_exam"] == 1, "total_hostel_power"].mean()
-        hostel_norm = late_night.loc[late_night["is_exam"] == 0, "total_hostel_power"].mean()
-    else:
-        hostel_exam = df.loc[df["is_exam"] == 1, "total_hostel_power"].mean()
-        hostel_norm = df.loc[df["is_exam"] == 0, "total_hostel_power"].mean()
-    en1 = float(hostel_exam - hostel_norm)
-
-    # EN2: Academic facility load: Weekday vs Weekend surplus
-    acad_wkday = df.loc[df["is_weekend"] == 0, "Academic"].mean()
-    acad_wkend = df.loc[df["is_weekend"] == 1, "Academic"].mean()
-    en2 = float(acad_wkday - acad_wkend)
-
-    # EN3: Anomaly reconstruction error separation
-    if "datetime" in df.columns:
-        df["date"] = pd.to_datetime(df["datetime"]).dt.date
-        df["hour"] = pd.to_datetime(df["datetime"]).dt.hour
-        piv = df.pivot_table(index="date", columns="hour", values="Academic").dropna()
-        if len(piv) >= 30 and piv.shape[1] >= 12:
-            X = piv.values
-            Xs = StandardScaler().fit_transform(X)
-            m_pca = PCA(n_components=min(3, Xs.shape[1]), random_state=0).fit(Xs)
-            recon = m_pca.inverse_transform(m_pca.transform(Xs))
-            errs = ((Xs - recon) ** 2).mean(axis=1)
-            q90 = np.quantile(errs, 0.90)
-            high_err = errs[errs >= q90]
-            low_err = errs[errs < q90]
-            en3 = float(high_err.mean() - low_err.mean()) if len(high_err) > 0 and len(low_err) > 0 else float("nan")
-        else:
-            en3 = float("nan")
-    else:
-        en3 = float("nan")
-
+    day = df[(df["hour"] >= 9) & (df["hour"] < 18)] if "hour" in df else df
+    nights = night_rows(df)
+    en1 = _mean(day, day["is_teaching"] == 1, "Academic") - _mean(day, day["is_teaching"] == 0, "Academic")
+    en2 = _mean(nights, nights["is_vacation"] == 0, "total_hostel_power") - _mean(nights, nights["is_vacation"] == 1, "total_hostel_power")
+    en3, _ = term_vs_vacation_within_month(df)
     return {"EN1": en1, "EN2": en2, "EN3": en3}
 
 
 def run_stats(df: pd.DataFrame) -> dict:
-    """Welch t-tests for exam period surge and weekday academic activity."""
-    late_night = df[df["is_late_night"] == 1] if "is_late_night" in df.columns else df
-    t_exam = stats_tests.welch_t(
-        late_night.loc[late_night["is_exam"] == 1, "total_hostel_power"],
-        late_night.loc[late_night["is_exam"] == 0, "total_hostel_power"],
-    )
-    t_weekday = stats_tests.welch_t(
-        df.loc[df["is_weekend"] == 0, "Academic"],
-        df.loc[df["is_weekend"] == 1, "Academic"],
-    )
-    return {"exam_t": t_exam, "weekday_t": t_weekday}
+    """Welch t-tests for the raw comparisons and a one-sample t-test on the same-month differences."""
+    from scipy import stats as st
+    day = df[(df["hour"] >= 9) & (df["hour"] < 18)] if "hour" in df else df
+    nights = night_rows(df)
+    teaching_t = stats_tests.welch_t(day.loc[day["is_teaching"] == 1, "Academic"], day.loc[day["is_teaching"] == 0, "Academic"])
+    term_t = stats_tests.welch_t(nights.loc[nights["is_vacation"] == 0, "total_hostel_power"],
+                                 nights.loc[nights["is_vacation"] == 1, "total_hostel_power"])
+    _, months = term_vs_vacation_within_month(df)
+    if len(months) >= 3:
+        t, p = st.ttest_1samp(months["diff"], 0.0)
+        within = dict(n_months=len(months), mean_diff=months["diff"].mean(), t=t, p=p,
+                      share_months_positive=(months["diff"] > 0).mean())
+    else:
+        within = dict(n_months=len(months), mean_diff=np.nan, t=np.nan, p=np.nan, share_months_positive=np.nan)
+    return {"teaching_t": teaching_t, "term_t": term_t, "within_month_t": within, "by_month": months,
+            "bonferroni": stats_tests.bonferroni([x for x in [teaching_t["p"], term_t["p"], within["p"]] if pd.notna(x)])}
 
 
-def get_daily_profile_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    """Shape transformation: Time series -> 24-hour daily load profile matrix (L11)."""
-    df["date"] = pd.to_datetime(df["datetime"]).dt.date
-    df["hour"] = pd.to_datetime(df["datetime"]).dt.hour
-    piv = df.pivot_table(index="date", columns="hour", values="Academic").dropna()
-    piv.columns = [f"hr_{h}" for h in piv.columns]
-    return piv
+def get_daily_profile_matrix(df: pd.DataFrame, meter: str = "Academic") -> pd.DataFrame:
+    """Shape transformation (L11): one row per day, 24 columns = average power in each hour."""
+    d = df.assign(date=df["datetime"].dt.date, hour=df["datetime"].dt.hour)
+    table = d.pivot_table(index="date", columns="hour", values=meter).dropna()
+    table.columns = [f"hr_{h}" for h in table.columns]
+    return table
 
 
 def run_decomposition(df: pd.DataFrame, n_components: int = 3) -> dict:
-    """Run PCA, TruncatedSVD, and t-SNE on daily load shapes (L12-14)."""
     X = get_daily_profile_matrix(df)
     pca_pts, pca_var, _ = reduce.pca(X, n=n_components)
     svd_pts, svd_var, _ = reduce.svd(X, n=n_components)
-    n_sample = min(500, len(X))
-    sample_idx = X.sample(n_sample, random_state=0).index
-    tsne_pts = reduce.tsne(X.loc[sample_idx], perplexity=30)
-    return {
-        "pca_pts": pca_pts,
-        "pca_variance": pca_var,
-        "svd_pts": svd_pts,
-        "svd_variance": svd_var,
-        "tsne_pts": tsne_pts,
-        "sample_idx": sample_idx,
-    }
+    sample_idx = clustering.sample_rows(X, 500).index
+    return {"pca_pts": pca_pts, "pca_variance": pca_var, "svd_pts": svd_pts, "svd_variance": svd_var,
+            "tsne_pts": reduce.tsne(X.loc[sample_idx], perplexity=30), "sample_idx": sample_idx}
 
 
 def run_clustering(df: pd.DataFrame, k: int = 3) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Cluster 24-hour daily load curves: regular weekday, weekend base, exam surge (L19-21)."""
+    """Group days by the shape of their 24-hour academic-building load curve (L19-21)."""
     X = get_daily_profile_matrix(df)
     metrics, labels = clustering.run_all(X.values, k=k)
-    km_labels = labels["kmeans"]
-    sub_df = X.copy()
-    sub_df["load_cluster"] = km_labels
-    profiles = sub_df.groupby("load_cluster").mean().round(1)
+    calendar = df.assign(date=df["datetime"].dt.date).groupby("date")[["is_teaching", "is_vacation", "is_weekend"]].max()
+    days = X.assign(group=labels["kmeans"]).join(calendar)
+    profiles = days.groupby("group").agg(days=("hr_12", "size"), teaching_share=("is_teaching", "mean"),
+                                         vacation_share=("is_vacation", "mean"), weekend_share=("is_weekend", "mean"),
+                                         noon_power=("hr_12", "mean"), night_power=("hr_2", "mean")).round(3)
     return metrics, profiles
 
 
 def run_autoencoder(df: pd.DataFrame) -> np.ndarray:
-    """Autoencoder anomaly detection on daily load profiles (L16)."""
-    X = get_daily_profile_matrix(df)
-    n_sample = min(300, len(X))
-    return reduce.autoencoder_scores(X.iloc[:n_sample].values, bottleneck=4, epochs=30)
+    """Autoencoder reconstruction error per day as an anomaly score (L16)."""
+    X = clustering.sample_rows(get_daily_profile_matrix(df), 300)
+    return reduce.autoencoder_scores(X.values, bottleneck=4, epochs=30)
+
+
+def delhi_season(month: int) -> str:
+    return {12: "winter", 1: "winter", 2: "winter", 3: "spring", 4: "summer", 5: "summer", 6: "summer",
+            7: "monsoon", 8: "monsoon", 9: "monsoon", 10: "autumn", 11: "autumn"}[month]
 
 
 def mine_energy_rules(df: pd.DataFrame) -> pd.DataFrame:
-    """Apriori rules linking calendar events to high campus energy demand (L18)."""
-    q_power = pd.qcut(df["total_campus_power"], 3, labels=["low_power", "med_power", "hi_power"])
-    sub = pd.DataFrame({
-        "exam": df["is_exam"].map({1: "exam_week", 0: "normal_week"}),
-        "weekend": df["is_weekend"].map({1: "weekend", 0: "weekday"}),
-        "power_demand": q_power,
+    """Apriori (L18): which calendar, time-of-day and season combinations go with high campus demand?"""
+    items = pd.DataFrame({
+        "day": df["is_teaching"].map({1: "teaching_day", 0: "low_activity_day"}),
+        "period": df["is_vacation"].map({1: "vacation", 0: "term"}),
+        "time": pd.cut(df["datetime"].dt.hour, [-1, 5, 9, 17, 23], labels=["night", "morning", "daytime", "evening"]),
+        "season": df["datetime"].dt.month.map(delhi_season),
+        "power_demand": pd.qcut(df["total_campus_power"], 3, labels=["low_power", "med_power", "hi_power"]),
     }).dropna()
-    onehot = pd.get_dummies(sub)
-    return rules.mine_rules(onehot, min_support=0.05, min_lift=1.1, min_conf=0.4, consequent_prefix="power_demand_hi_power")
+    return rules.mine_rules(pd.get_dummies(items), min_support=0.03, min_lift=1.2, min_conf=0.5,
+                            consequent_prefix="power_demand_hi_power")
