@@ -1,0 +1,7 @@
+data/raw/oulad/*
+data/raw/yrbs/*
+data/raw/iblend/*
+data/processed/
+__pycache__/
+.ipynb_checkpoints/
+.venv/

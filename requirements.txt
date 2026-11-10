@@ -1,0 +1,16 @@
+pandas>=2.0
+numpy
+scipy
+statsmodels
+scikit-learn
+mlxtend
+matplotlib
+seaborn
+pyarrow
+streamlit
+ucimlrepo
+requests
+rapidfuzz
+pyreadstat
+torch
+pytest
