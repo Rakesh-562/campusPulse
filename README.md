@@ -57,7 +57,7 @@ choices and reach different conclusions. So CampusPulse asks two questions for e
 | v3.1 (current) | Narrowed to the three pulses we present (Academic, Wellbeing, Energy); each finding now has its own graph and a simple z, t or chi-square test |
 
 The evidence is in [notebooks/00_forensics_why_we_switched.ipynb](notebooks/00_forensics_why_we_switched.ipynb)
-and on the dashboard's Method page.
+and in the forensics notebook.
 
 ---
 
@@ -66,7 +66,7 @@ and on the dashboard's Method page.
 | # | Pulse | Question | Dataset | Main data challenge |
 |---|---|---|---|---|
 | ① | **Academic** | Who drops out of university, and how early can we tell? | UCI 697 *Predict Students' Dropout and Academic Success*: 4,424 students, Polytechnic Institute of Portalegre (Portugal) | 538 students were enrolled in units but graded 0: **missing exams, not scores** (91.6% of them dropped out). 794 students were still "Enrolled" when data collection ended. Unemployment, inflation and GDP take only 10 values, one per entry cohort |
-| ② | **Wellbeing** | Which behaviours co-occur with persistent sadness? | CDC YRBS 2023 national high-school survey (20,103 students) + Malaysia university mental-health survey (n = 101) | ~1% skip the sadness question but 13% skip sleep and 24% skip social media. Survey weights. YRBS question numbers change every year, so `scripts/preprocess_yrbs.py` names every column. 49 spellings of course names in the Malaysia survey |
+| ② | **Wellbeing** | Which behaviours co-occur with persistent sadness? | CDC YRBS 2023 national high-school survey (20,103 students) | ~1% skip the sadness question but 13% skip sleep and 24% skip social media. Survey weights. YRBS question numbers change every year, so `scripts/preprocess_yrbs.py` names every column |
 | ③ | **Energy** | When does a campus building behave differently, and why? | I-BLEND (IIIT Delhi, an Indian campus): 52 months of 1-minute smart-meter data + institute calendar | Hostel meters sent no reading in ~25% of hours. The calendar marks teaching and low-activity days but **no exam dates**. Delhi's long vacation is also its hottest season |
 
 We never join rows across datasets: they describe different people in different countries, so we compare *conclusions*.
@@ -88,8 +88,7 @@ def finding_evidence() -> dict: ...           # per finding: the bars of its gra
 **Decision log.** `DecisionLog` records every cleaning step with the rows before and after, the option chosen, and why.
 
 **Simple hypothesis tests.** Each finding is tested with the simplest course test for its comparison:
-two-proportion **z-test** (two percentages), two-sample **t-test** (two means), **chi-square** test (two categories),
-one-sample **t-test** (a set of differences against 0). `stats_tests.conclude()` and `test_result()` write the decision
+two-proportion **z-test** (two percentages), two-sample **t-test** (two means), one-sample **t-test** (a set of differences against 0). `stats_tests.conclude()` and `test_result()` write the decision
 from the p-value; nothing is typed in advance.
 
 **Finding Robustness Matrix.** `robustness_matrix()` reruns the pipeline once for every alternative option, one
@@ -120,7 +119,6 @@ Computed on the real data (`scripts/export_dashboard_data.py`, Nov 2026).
 | W1 Sleep under 8 hours → more persistent sadness | **+18.1 pp** (44.5% vs 26.4%) | z = 20.50, p < 0.0001 | holds |
 | W2 Bullied → more sadness | **+34.3 pp** (66.1% vs 31.8%) | z = 38.54, p < 0.0001 | holds |
 | W3 Inactive (0 days) → more sadness | **+10.6 pp** (49.3% vs 38.7%) | z = 9.01, p < 0.0001 | holds |
-| W4 Malaysia: course and depression | no link | chi-square = 6.08, p = 0.41 | **inflates** on raw course text (48 tiny "courses" fake a link) |
 
 Sadness falls from 60% at ≤4 hours of sleep to 26% at 8 hours, then rises to 34% at 10+ hours.
 
@@ -133,8 +131,7 @@ Sadness falls from 60% at ≤4 hours of sleep to 26% at 8 hours, then rises to 3
 
 ### The cleaning choices that would have changed the answer
 1. **Academic A3:** treat ungraded students' 0 as a real score, and the grade gap looks 5.5× bigger than it is.
-2. **Wellbeing W4:** skip the course-name cleaning, and a non-existent course–depression link appears.
-3. **Energy EN3:** fill meter gaps by repeating the last reading, and the same-month effect halves.
+2. **Energy EN3:** fill meter gaps by repeating the last reading, and the same-month effect halves.
 
 ---
 
@@ -175,7 +172,7 @@ Each pulse page has six numbered tabs, in presentation order:
 | Tab | What it shows |
 |---|---|
 | 1. Data processing | The main data problem, its graphs, and the cleaning log |
-| 2. Statistics | Descriptive statistics, distributions, one simple test per finding |
+| 2. Statistics | Descriptive statistics and one simple test per finding |
 | 3. Dimensionality reduction | PCA and t-SNE maps coloured by outcome, variance explained, loadings |
 | 4. Association rules | Two Apriori rules per pulse that sound like common sense but have lift below 1 |
 | 5. Clustering | K-Means groups on a PCA map, four methods compared, group profiles |
@@ -193,7 +190,7 @@ campusPulse/
 ├── README.md, DASHBOARD_GUIDE.md, PLAN.md, requirements.txt
 ├── campuspulse/
 │   ├── common/        decisions.py (log, robustness), stats_tests.py (z, t, chi-square, F),
-│   │                  reduce.py (PCA, SVD, t-SNE, autoencoder), clustering.py, rules.py, plots.py
+│   │                  reduce.py (PCA, SVD, t-SNE), clustering.py, rules.py, plots.py
 │   ├── academic/pipeline.py    ① incl. early-warning timeline, debt within grade bands
 │   ├── wellbeing/pipeline.py   ② incl. survey weights, course-text cleaning
 │   └── energy/pipeline.py      ③ incl. same-month term-vs-vacation check
@@ -213,7 +210,6 @@ campusPulse/
 |---|---|---|---|
 | ① | Predict Students' Dropout and Academic Success (UCI 697) | https://archive.ics.uci.edu/dataset/697 | CC BY 4.0 |
 | ② | Youth Risk Behavior Survey 2023, national high school | https://www.cdc.gov/yrbs/data/index.html | US public domain |
-| ② | Student Mental Health survey (Malaysia, 2020) | Kaggle | open dataset |
 | ③ | I-BLEND campus electricity + calendar | https://doi.org/10.6084/m9.figshare.c.3893581 | CC BY 4.0 |
 | legacy | Student Lifestyle dataset (synthetic) | Kaggle / OpenML | used only to show why we switched |
 
@@ -228,14 +224,12 @@ campusPulse/
 | Noise removal / smoothing (L5) | Energy: rolling median for spikes |
 | Outliers (L6–7) | Energy: 99th-percentile clipping vs raw; Academic: IQR on age |
 | Missing values (L7–8) | **Academic:** ungraded zeros as missing-not-at-random · **Wellbeing:** skipped answers (drop / mode / flag) · **Energy:** meter gaps (drop / interpolate / forward-fill) |
-| Text features (L9) | **Wellbeing:** 49 course spellings → 7 disciplines |
 | Shape transformation (L11) | **Energy:** hourly series → day × 24-hour matrix; Academic: one-hot of coded categories |
 | Encoding, PCA, SVD (L12–13) | PCA on quantities, TruncatedSVD on the one-hot matrix |
-| t-SNE (L14) | 2-D maps for all three pulses |
-| Autoencoders (L16) | Reconstruction error as an anomaly score (academic students, energy days) |
+| t-SNE (L14) | 2-D maps for academic and energy (not shown for wellbeing: only 32 distinct answer combinations) |
 | Association rules (L18) | Apriori; per pulse, two common beliefs the data contradicts (lift < 1), via `rules.surprising_rules` |
-| Clustering (L19–21) | K-Means, Ward, DBSCAN (k-distance eps), OPTICS on standardised features |
-| Hypothesis testing | Two-proportion z, two-sample t, chi-square, one-sample t (one per finding) |
+| Clustering (L19–21) | K-Means, DBSCAN (k-distance eps), OPTICS on standardised features |
+| Hypothesis testing | Two-proportion z, two-sample t, one-sample t (one per finding) |
 
 ---
 
@@ -250,7 +244,7 @@ least one finding; every finding has a graph and a complete test; each pipeline 
 
 - **Not our university.** Three institutions in three countries; the method transfers, the numbers may not.
 - **Association, not causation** everywhere.
-- **YRBS is a high-school survey.** The Malaysia survey has 101 respondents, so W4 is exploratory.
+- **YRBS is a high-school survey**, not university students.
 - **No exam dates** in the I-BLEND calendar; hostel electricity is not a measurement of sleep.
 - **One decision at a time.** Combinations of cleaning choices are not tested.
 - **Outcome censoring.** 18% of UCI students were still enrolled; we exclude them by default and test counting them as non-dropouts.

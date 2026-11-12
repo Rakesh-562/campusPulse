@@ -16,17 +16,17 @@ answer whether it survives a different data-cleaning choice.
 
 | Page (top bar) | What it is for |
 |---|---|
-| Overview | The umbrella question, one card per research question with its headline number, and the cleaning choices that change an answer |
+| Overview | The umbrella question and the three research questions with their datasets |
 | ① Academic, ② Wellbeing, ③ Energy | One page per research question |
 | Robustness | Every finding recomputed under every alternative cleaning choice |
-| Method | The method, why the first dataset was dropped, limitations |
+| Conclusions | One block of conclusions per question, the answer to the umbrella question, and the limitations |
 
 Each research-question page has six numbered tabs, in the order we present them. Only the chosen tab is shown:
 
 | Tab | What it shows |
 |---|---|
 | 1. Data processing | The main data problem of that dataset, its graphs, and the step-by-step cleaning log |
-| 2. Statistics | Descriptive statistics, distributions, and one simple hypothesis test per finding |
+| 2. Statistics | Descriptive statistics and one simple hypothesis test per finding |
 | 3. Dimensionality reduction | PCA and t-SNE maps coloured by outcome, variance explained, loadings |
 | 4. Association rules | Two Apriori rules per pulse that sound like common sense but have lift below 1 |
 | 5. Clustering | K-Means groups on a PCA map, four methods compared, group profiles |
@@ -45,7 +45,6 @@ Put these links in your slides to jump straight to a view.
 |---|---|---|
 | Two percentages (e.g. dropout rate of debtors vs non-debtors) | Two-proportion z-test | A1, A2, A4, W1, W2, W3 |
 | Two means (e.g. mean grade, mean power) | Two-sample t-test (Welch) | A3, EN1, EN2 |
-| Two categorical variables (course × depression) | Chi-square test of independence | W4 |
 | One set of differences against 0 (monthly differences) | One-sample t-test | EN3 |
 
 Each test is written as H0, the statistic, p and the decision at 5%. With thousands of rows almost every test
@@ -80,9 +79,9 @@ close to the 63.9% maximum such a list can hold. Debt and missing scholarships a
 
 | Tab | What to look at | What it tells you |
 |---|---|---|
-| 1. Data processing | Hidden-zero tiles, A3 chart, grade histogram | 538 students were enrolled but graded 0; 91.6% of them dropped out against 23.9% of others, so a 0 is a missing exam, not a score. The histogram shows the 0 spike apart from real grades (which start near 10). Treating 0 as a score inflates the grade gap 5.5× |
+| 1. Data processing | Hidden-zero tiles, A3 chart, grade histogram | 538 students were enrolled but graded 0; 91.6% of them dropped out against 23.9% of others, so a 0 is a missing exam, not a score. The histogram shows the 0 spike apart from real grades (which start near 10). Treating 0 as a score inflates the grade gap 5.5×. **Age chart (outliers):** the IQR rule flags 389 students older than 34; they are real mature students, so they are kept (61% of them drop out vs 37%) |
 | 2. Statistics | Descriptive table, test table | Four tests, one per finding; all reject H0 |
-| 3. Dimensionality reduction | PCA and t-SNE | Dropouts and graduates separate on their own; PC1 is mostly approved course units |
+| 3. Dimensionality reduction | PCA and t-SNE | Dropouts and graduates separate on their own; PC1 is course progress |
 | 4. Association rules | Two common beliefs the data contradicts | Living away from home → dropout: lift 0.85 (33% vs 39% overall). International student → dropout: lift 0.91 |
 | 5. Clustering | Group profiles | One group of 232 students drops out at 90.5%; the largest group (709) at 23.6% |
 | 6. Findings | Four finding graphs + the answer chart | See below |
@@ -106,13 +105,12 @@ close to the 63.9% maximum such a list can hold. Debt and missing scholarships a
 
 **Answer:** bullying has the strongest link (+34.3 pp), then short sleep (+18.1 pp), then inactivity (+10.6 pp).
 All three hold under every cleaning choice. *Data: CDC YRBS 2023, US national high-school survey, 20,103 students
-(16,900 who answered every behaviour question), weighted; plus a Malaysian university survey (n = 101).*
+(16,900 who answered every behaviour question), weighted.*
 
 | Tab | What to look at | What it tells you |
 |---|---|---|
-| 1. Data processing | Skipped-questions chart, text-cleaning chart | ~1% skip the sadness question but 13% skip sleep and 24% skip social media, so dropping incomplete answers is not neutral. Raw course text (48 groups) fakes a strong course–depression link; cleaned (7 disciplines) does not |
-| 2. Statistics | Descriptive table, test table | Four tests, one per finding; W4 does not reject H0 |
-| 3. Dimensionality reduction | PCA and t-SNE | Five yes/no behaviours give only a few dozen answer combinations, so many students share a point |
+| 2. Statistics | Descriptive table, test table | Three tests, one per finding; all reject H0 |
+| 3. Dimensionality reduction | PCA (t-SNE not shown) | Variance is spread evenly, so PCA cannot compress the five behaviours; with only 32 answer combinations t-SNE cannot be interpreted, so it is not shown |
 | 4. Association rules | Two common beliefs the data contradicts | Heavy social media + 8 h sleep → sadness: lift 0.72 (29% vs 41%). Never exercises + male → sadness: lift 0.81 |
 | 5. Clustering | Group profiles | Sleep-deprived but active group: 58% sadness; rested and active group: 26% |
 | 6. Findings | Four finding graphs + sadness by hours of sleep | See below |
@@ -122,7 +120,6 @@ All three hold under every cleaning choice. *Data: CDC YRBS 2023, US national hi
 | W1 Sleep-deprived (< 8 h) report more sadness: **+18.1 pp** | 44.5% vs 26.4% | Two-proportion z = 20.50, p < 0.0001 → reject H0 |
 | W2 Bullied students report more sadness: **+34.3 pp** | 66.1% vs 31.8% | z = 38.54, p < 0.0001 → reject H0 |
 | W3 Inactive students report more sadness: **+10.6 pp** | 49.3% vs 38.7% | z = 9.01, p < 0.0001 → reject H0 |
-| W4 Course and depression (Malaysia, exploratory) | Depression rate per discipline, 16.7% to 66.7% (groups of 3 to 31 students) | Chi-square = 6.08, p = 0.41 → **do not** reject H0: no evidence of a link |
 
 The sleep chart: sadness falls from 60% at ≤4 hours to 26% at 8 hours, then rises again to 34% at 10+ hours.
 
@@ -141,12 +138,12 @@ test is not significant (p = 0.06). *Data: I-BLEND, IIIT Delhi, 38,520 hours (Au
 
 | Tab | What to look at | What it tells you |
 |---|---|---|
-| 1. Data processing | Meter-gap chart, hostel-power histogram | The hostel meters sent no reading in about 25% of hours; by default those hours are dropped |
+| 1. Data processing | Meter-gap chart | The hostel meters sent no reading in about 25% of hours; by default those hours are dropped |
 | 2. Statistics | Descriptive table, test table | Three tests, one per finding; EN3 does not reject H0 |
 | 3. Dimensionality reduction | PCA of daily load shapes | PC1 explains 57%: mostly the early-morning hours |
 | 4. Association rules | Two common beliefs the data contradicts | Weekend → hostels busy: lift 0.83 (28% vs 33%). June, the hottest month → campus busy: lift 0.88 (summer vacation) |
 | 5. Clustering | Day groups | 426 mostly weekend / vacation days (~24 kW at noon), 408 teaching days (~51 kW), 77 high-load teaching days (~57 kW) |
-| 6. Findings | Three finding graphs + calendar note | See below |
+| 6. Findings | Three finding graphs + **daily load curve** + calendar note | The curve: teaching days climb from about 7:00 to a noon peak near 50 kW; nights look the same on both day types |
 
 | Finding | Graph shows | Simple test |
 |---|---|---|
@@ -167,7 +164,7 @@ Open **Robustness**: each pulse is a card, rows = findings, columns = alternativ
 | Pulse | Checks that hold | What moves |
 |---|---|---|
 | ① Academic | 15 of 16 | A3 inflates 5.5× if ungraded zeros are treated as scores |
-| ② Wellbeing | 23 of 24 | W4 inflates without course-name cleaning |
+| ② Wellbeing | 15 of 15 | Nothing moves |
 | ③ Energy | 14 of 15 | EN3 weakens if meter gaps are filled by repeating the last reading |
 
 **The message:** most findings are solid, but a reasonable-looking choice (treating a missing exam as a 0, skipping
@@ -181,10 +178,10 @@ text cleaning) can create most of an effect, so cleaning decisions must be repor
 
 | Time | Where | What to show |
 |---|---|---|
-| 0:00–1:00 | Method page | Why we started over: the first dataset was generated (every row's hours add up to 24) |
+| 0:00–1:00 | Overview | The umbrella question and the three questions |
 | 1:00–5:00 | Each pulse, tabs 1 → 6 | Data processing first (the data problem), then one or two tabs, then Findings with its graphs and tests |
 | 5:00–6:00 | Robustness | The cleaning choices that change an answer |
-| 6:00–7:00 | Method page | Limitations, implications, next steps |
+| 6:00–7:00 | Conclusions | Conclusions per question, the umbrella answer, limitations |
 
 **Likely questions**
 

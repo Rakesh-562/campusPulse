@@ -30,9 +30,9 @@ META = {
                      source="Polytechnic Institute of Portalegre, Portugal · 4,424 students · 2008–2019 cohorts",
                      licence="CC BY 4.0", challenge="Grades of 0 that are really missing; unresolved 'Enrolled' outcomes"),
     "wellbeing": dict(num="②", title="Wellbeing", question="Which behaviours co-occur with persistent sadness?",
-                      dataset="CDC YRBS + Malaysia university mental-health survey",
-                      source="US Youth Risk Behavior Survey (high school) · Malaysia survey n=101 (2020)",
-                      licence="Public domain / open", challenge="Skipped sensitive answers, survey weights, 49 course spellings"),
+                      dataset="CDC YRBS 2023",
+                      source="US Youth Risk Behavior Survey 2023, national high-school sample",
+                      licence="Public domain / open", challenge="Skipped answers on some questions; survey weights"),
     "energy": dict(num="③", title="Energy", question="When does a campus building behave differently, and why?",
                    dataset="I-BLEND · campus building electricity",
                    source="IIIT Delhi, India · 52 months of 1-minute smart-meter data · institute calendar (teaching vs low-activity days)",
@@ -184,8 +184,7 @@ def extras_academic(P):
                                P.ENROLLED1: "Semester-1 units enrolled", "Curricular units 2nd sem (grade)": "Semester-2 grade (0–20, raw)"}),
         histograms=[histogram(raw[P.GRADE], np.arange(0, 21, 1), "Semester-1 grade in the raw file (all 4,424 students)",
                               "The spike at 0 is the hidden-missing problem: real grades start around 10."),
-                    histogram(raw["Age at enrollment"], np.arange(15, 72, 3), "Age at enrolment",
-                              "Right-skewed: a long tail of mature students, kept as real (IQR flags them, they are not errors).")],
+                    histogram(raw["Age at enrollment"], np.arange(15, 72, 3), "Age at enrolment", age_note(P, df))],
         dr=dr_block(P.get_feature_matrix(df), df["dropout"].values, {0: "Graduated", 1: "Dropped out"}),
         cluster_map=cluster_map(P.get_feature_matrix(df), 3, 1000),
     )
@@ -193,12 +192,10 @@ def extras_academic(P):
 
 def extras_wellbeing(P):
     D = defaults(P.DECISIONS)
-    yr, mh = P.clean(D)
+    yr = P.clean(D)
     st = P.run_stats(yr)
     gradient = yr.groupby("sleep_hours").apply(lambda g: np.average(g["sadness"], weights=g["w"])).rename("rate").reset_index()
     return dict(sleep_gradient=gradient,
-                course_association={opt: P.course_depression_association(P.clean({**D, "course_standardization": opt})[1])
-                                    for opt in P.DECISIONS["course_standardization"]},
                 tests=[test_row("Sleep deprivation × sadness (χ²)", st["sleep_chi2"], "chi2", "cramers_v", "Cramér's V"),
                        test_row("Bullied × sadness (χ²)", st["bully_chi2"], "chi2", "cramers_v", "Cramér's V"),
                        test_row("Inactive × sadness (χ²)", st["inactivity_chi2"], "chi2", "cramers_v", "Cramér's V"),
@@ -208,7 +205,7 @@ def extras_wellbeing(P):
                 describe=describe(yr, {"sleep_hours": "Hours of sleep on a school night", "active_days": "Days physically active (0–7)",
                                        "sadness": "Persistent sadness (share)", "bullied": "Bullied at school or online (share)",
                                        "heavy_social_media": "Social media several times a day or more (share)"}),
-                skipped=[dict(question=k, share=float(v)) for k, v in P.load_raw()[0][["sad", "sleep_code", "active_code",
+                skipped=[dict(question=k, share=float(v)) for k, v in P.load_raw()[["sad", "sleep_code", "active_code",
                          "social_media_code", "bullied_school"]].isna().mean().items()],
                 histograms=[histogram(yr["sleep_hours"], np.arange(3.5, 11, 1), "Hours of sleep on a school night",
                                       "4 = four hours or less, 10 = ten or more. CDC counts fewer than 8 as not enough.")],
@@ -225,7 +222,9 @@ def extras_energy(P):
     metrics, profiles = P.run_clustering(df)
     raw = P.load_raw()
     gaps = [dict(meter=m, share=float(raw[m].isna().mean())) for m in P.METERS[:9] if m in raw]
-    return dict(by_month=st["by_month"], gaps=gaps,
+    curve = (df.groupby(["is_teaching", "hour"])["Academic"].mean() / 1000).round(2)
+    load_curve = [dict(hour=int(h), teaching=float(curve.get((1, h), np.nan)), low=float(curve.get((0, h), np.nan))) for h in range(24)]
+    return dict(by_month=st["by_month"], gaps=gaps, load_curve=load_curve,
                 tests=[test_row("Academic building by day, teaching vs low-activity (Welch t)", st["teaching_t"], "t", "cohens_d", "Cohen's d"),
                        test_row("Hostels at night, term vs vacation (Welch t)", st["term_t"], "t", "cohens_d", "Cohen's d"),
                        dict(test="Term − vacation, same month only (one-sample t)", statistic=w["t"], p=w["p"],
@@ -238,6 +237,14 @@ def extras_energy(P):
                                       "Hours where any hostel meter was silent were dropped (the default meter-gap choice).")],
                 dr=safe("dimensionality reduction", lambda: energy_dr(P, df)),
                 cluster_map=safe("cluster map", lambda: cluster_map(P.get_daily_profile_matrix(df), 3, 2000)))
+
+
+def age_note(P, df):
+    """IQR outlier rule on age (L6-7), in words, with the numbers."""
+    o = P.detect_outliers(df)
+    return (f"Right-skewed. The IQR rule flags {o['outlier_count']} students older than {o['iqr_threshold']:.1f} as outliers. "
+            f"They are real mature students, not errors, so they are kept: {o['outlier_dropout_rate']:.0%} of them drop out "
+            f"against {o['others_dropout_rate']:.0%} of younger students.")
 
 
 def energy_dr(P, df):
@@ -298,8 +305,8 @@ def interpret_wellbeing(X):
         f"persistent sadness sit at {_pc1_mean(D, 'Persistent sadness'):+.2f} on PC1, others at {_pc1_mean(D, 'No persistent sadness'):+.2f}: "
         "a shift, not a separation.",
         f"PC2 ({v[1]:.0%}) sets inactivity against heavy social media.",
-        f"t-SNE cannot be interpreted here: only {D['n_unique']} different answer combinations exist, so the map just scatters copies of "
-        "the same few points.",
+        f"t-SNE is not shown: only {D['n_unique']} different answer combinations exist, so its map would just scatter copies of "
+        "the same few points and could not be interpreted.",
     ]
     cl = [
         "With yes/no answers, K-Means groups students by the answers themselves, so the groups are answer combinations rather "
@@ -353,7 +360,9 @@ def forensics():
     s = df[hours].sum(axis=1)
     acc = {d: DecisionTreeClassifier(max_depth=d, random_state=0).fit(df[hours], df["Stress_Level"]).score(df[hours], df["Stress_Level"])
            for d in (1, 2, 3)}
-    return dict(available=True, rows=len(df), rows_summing_to_24=int((s.round(6) == 24).sum()),
+    sample = df.sample(min(700, len(df)), random_state=0)
+    points = [dict(x=float(r.Study_Hours_Per_Day), y=float(r.Sleep_Hours_Per_Day), c=str(r.Stress_Level)) for r in sample.itertuples()]
+    return dict(available=True, rows=len(df), rows_summing_to_24=int((s.round(6) == 24).sum()), stress_points=points,
                 tree_accuracy=[dict(depth=k, accuracy=v) for k, v in acc.items()],
                 missing=int(df.isna().sum().sum()), duplicates=int(df.drop(columns="Student_ID").duplicated().sum()))
 

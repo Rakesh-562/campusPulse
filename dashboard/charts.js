@@ -271,5 +271,34 @@
     el("text", { x: sx(hi), y: H - 10, "text-anchor": "end" }, el("g", { class: "tick" }, s)).textContent = fmt(hi);
   }
 
-  window.Charts = { hbars, columns, dots, intervals, stacked, scatter, histogram };
+  /* Lines over a numeric x axis. series: [{label, color, points:[{x, y}]}] */
+  function lines(container, series, opts = {}) {
+    const W = width(container), H = opts.height || 240, m = { l: 44, r: 12, t: 12, b: 30 };
+    const s = svg(container, W, H);
+    const all = series.flatMap((se) => se.points);
+    const x0 = Math.min(...all.map((p) => p.x)), x1 = Math.max(...all.map((p) => p.x));
+    const y1 = Math.max(...all.map((p) => p.y)) * 1.1, y0 = 0;
+    const sx = (v) => m.l + ((v - x0) / (x1 - x0 || 1)) * (W - m.l - m.r);
+    const sy = (v) => H - m.b - ((v - y0) / (y1 - y0 || 1)) * (H - m.t - m.b);
+    const fmt = opts.fmt || ((v) => v.toFixed(0));
+    niceTicks(y0, y1, 4).forEach((t) => {
+      el("line", { x1: m.l, x2: W - m.r, y1: sy(t), y2: sy(t), class: "gridline" }, s);
+      el("text", { x: m.l - 6, y: sy(t) + 4, "text-anchor": "end" }, el("g", { class: "tick" }, s)).textContent = fmt(t);
+    });
+    (opts.xTicks || niceTicks(x0, x1, 6)).forEach((t) => {
+      el("text", { x: sx(t), y: H - 10, "text-anchor": "middle" }, el("g", { class: "tick" }, s)).textContent = opts.xFmt ? opts.xFmt(t) : t;
+    });
+    el("line", { x1: m.l, x2: W - m.r, y1: sy(0), y2: sy(0), class: "baseline" }, s);
+    series.forEach((se) => {
+      const d = se.points.map((p, i) => `${i ? "L" : "M"}${sx(p.x)},${sy(p.y)}`).join("");
+      el("path", { d, fill: "none", stroke: se.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, s);
+      se.points.forEach((p) => {
+        const c = el("circle", { cx: sx(p.x), cy: sy(p.y), r: 3, fill: se.color, stroke: "var(--surface)", "stroke-width": 1 }, s);
+        hover(c, `<b>${se.label}</b><br>${opts.xFmt ? opts.xFmt(p.x) : p.x}: ${fmt(p.y)}${opts.unit || ""}`);
+      });
+    });
+    legend(container, series.map((se) => [se.color, se.label]));
+  }
+
+  window.Charts = { hbars, columns, dots, intervals, stacked, scatter, histogram, lines };
 })();

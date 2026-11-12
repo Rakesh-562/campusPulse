@@ -28,7 +28,7 @@ warnings depend on our data-cleaning decisions?*
 | Pulse | Question | Dataset |
 |---|---|---|
 | ① Academic | Who drops out, and how early can we tell? | UCI 697, Portuguese polytechnic, 4,424 students |
-| ② Wellbeing | Which behaviours co-occur with persistent sadness? | CDC YRBS 2023 (20,103 students) + Malaysia survey (n=101) |
+| ② Wellbeing | Which behaviours co-occur with persistent sadness? | CDC YRBS 2023, US high schools (20,103 students) |
 | ③ Energy | When does a campus building behave differently? | I-BLEND, IIIT Delhi, 52 months of meter data + teaching calendar |
 
 > Every number below is computed by the code cells in this notebook, not typed in.""")
@@ -93,7 +93,7 @@ print(st_en["by_month"].round(0).to_string(index=False))""")
 **Limitations**
 - Three institutions in three countries, none of them ours. We compare *conclusions*, never join rows across datasets.
 - Every finding is an association, not a cause.
-- YRBS is a high-school survey; the Malaysia survey has n = 101, so W4 is exploratory.
+- YRBS is a high-school survey, not university students.
 - Hostel power is not a measurement of sleep, and the I-BLEND calendar has no exam dates.
 - The robustness matrix changes one decision at a time; combinations are not tested.
 

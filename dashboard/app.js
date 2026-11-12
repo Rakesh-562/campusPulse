@@ -9,7 +9,7 @@
  *   #/                     overview
  *   #/<pulse>/<panel>      one pulse, one deliverable panel (e.g. #/academic/statistics)
  *   #/robustness           every robustness matrix
- *   #/method               method, limitations, why we changed dataset
+ *   #/conclusions          conclusions and limitations
  */
 
 const DATA = window.CAMPUSPULSE;
@@ -30,7 +30,7 @@ const SHORT = {
   A1: "Debtors drop out more", A2: "Scholarship holders drop out less", A3: "Dropouts have lower semester-1 grades",
   A4: "Debt matters within each grade band",
   W1: "Sleep-deprived students report more sadness", W2: "Bullied students report more sadness",
-  W3: "Inactive students report more sadness", W4: "Course and depression (exploratory)",
+  W3: "Inactive students report more sadness",
   EN1: "Academic building uses more on teaching days", EN2: "Hostels use more at night in term than vacation",
   EN3: "Term-vs-vacation difference within the same month",
 };
@@ -62,7 +62,6 @@ function pValue(p) { return isMissing(p) ? "n/a" : p < 0.0001 ? "< 0.0001" : p.t
 function formatFinding(id, v) {
   if (["A1", "A2", "A4", "W1", "W2", "W3"].includes(id)) return points(v);
   if (id === "A3") return signed(v, 2, " grade pts");
-  if (id === "W4") return isMissing(v) ? "n/a" : "V = " + number(v, 3);
   if (id.startsWith("EN")) return signed(v / 1000, 1, " kW");
   return signed(v, 3);
 }
@@ -122,46 +121,17 @@ function testLine(t) {
 /* ------------------------------------------------------------------ overview page */
 
 function overviewPage() {
-  // The findings that one cleaning choice moves the most, across the pulses.
-  let fragile = [];
+  let cards = "";
   for (const p of PULSES) {
-    const pulse = DATA.pulses[p];
-    if (!pulse.available) continue;
-    for (const f of pulse.robustness.fragility) if (f.verdict === "fragile") fragile.push({ ...f, pulse: p });
+    const m = DATA.pulses[p].meta;
+    cards += `<a class="card link" href="#/${p}/processing"><div class="sub">${m.num} ${m.title}</div>
+      <h3>${esc(m.question)}</h3><p class="small muted">${esc(m.dataset)} · ${esc(m.source)}</p></a>`;
   }
-  const size = (f) => (f.change === "sign flips" ? 1e9 : parseFloat(f.change.slice(1)));
-  fragile.sort((a, b) => size(b) - size(a));
-
-  let fragileCards = "";
-  for (const f of fragile.slice(0, 3)) {
-    const meta = DATA.pulses[f.pulse].meta;
-    fragileCards += `<div class="card"><div class="sub">${meta.num} ${meta.title} · ${f.finding}</div>
-      <h3>${esc(shortName(f.finding, f.claim))}</h3>
-      <p class="small">Default <b>${formatFinding(f.finding, f.default)}</b> → with <code>${esc(niceVariant(f.worst_variant))}</code>
-      <b>${formatFinding(f.finding, f.worst_value)}</b> (${esc(f.change)}).</p></div>`;
-  }
-
-  let pulseCards = "";
-  for (const p of PULSES) {
-    const pulse = DATA.pulses[p];
-    const firstId = Object.keys(pulse.findings)[0];
-    const body = pulse.available
-      ? `<div class="tile"><div class="label">${firstId} · ${esc(shortName(firstId, pulse.findings[firstId]))}</div>
-         <div class="value compact">${formatFinding(firstId, pulse.robustness.values[firstId].DEFAULT)}</div>
-         <div class="note">${pulse.robustness.summary.holds}/${pulse.robustness.summary.tested} checks hold</div></div>`
-      : `<p class="small muted">Data not exported on this machine.</p>`;
-    pulseCards += `<a class="card link" href="#/${p}/processing"><div class="sub">${pulse.meta.num} ${pulse.meta.title}</div>
-      <h3>${esc(pulse.meta.question)}</h3>${body}</a>`;
-  }
-
   $("#app").innerHTML = `
     <h1>CampusPulse</h1>
-    <p class="lede">Three real datasets, each a "vital sign" of a university. Every cleaning decision is logged and every
-    finding is re-computed under each reasonable alternative, so we know which conclusions are solid.</p>
     <div class="question"><b>Umbrella question.</b> Can routine campus data warn a university early enough to act, and how
     much do those warnings depend on our data-cleaning decisions?</div>
-    <h2>The three vital signs</h2><div class="grid g3">${pulseCards}</div>
-    ${fragileCards ? `<h2>Cleaning choices that change the answer</h2><div class="grid g3">${fragileCards}</div>` : ""}`;
+    <h2>Three questions, three real datasets</h2><div class="grid g3">${cards}</div>`;
 }
 
 /* ------------------------------------------------------------------ pulse page */
@@ -205,6 +175,8 @@ function processingPanel(p, pulse, X) {
     const z = X.hidden_zeros;
     const grades = (X.histograms || []).find((h) => h.label.startsWith("Semester-1 grade"));
     if (grades) addChart(() => Charts.histogram($("#c-grades"), grades.bins, { highlight: (b) => b.lo === 0 }));
+    const ages = (X.histograms || []).find((h) => h.label.startsWith("Age"));
+    if (ages) addChart(() => Charts.histogram($("#c-ages"), ages.bins, { fmt: (v) => v.toFixed(0), unit: "students" }));
     addChart(() => Charts.hbars($("#c-proc"), X.a3_by_zero_grade.map((r) => ({
       label: { nan_plus_flag: "0 = missing (default)", as_score: "0 = real score", drop: "drop those rows" }[r.option] || r.option,
       value: r.value, color: r.option === "as_score" ? "var(--critical)" : "var(--series-1)" })), { fmt: (v) => v.toFixed(2), labelWidth: 150 }));
@@ -215,26 +187,18 @@ function processingPanel(p, pulse, X) {
       <div class="card tile"><div class="label">No enrolled units in semester 1</div><div class="value">${z.no_units}</div>
         <div class="note">${z.no_units_graduated} still graduated, so 0 is not failure.</div></div>
       ${card("Grade gap (A3) under each treatment of 0", "Persisters minus dropouts, out of 20", chartBox("c-proc"))}</div>
-      ${grades ? `<div style="margin-top:16px">${card(esc(grades.label), esc(grades.note || ""), chartBox("c-grades"))}</div>` : ""}`;
+      ${grades ? `<div style="margin-top:16px">${card(esc(grades.label), esc(grades.note || ""), chartBox("c-grades"))}</div>` : ""}
+      ${ages ? `<div style="margin-top:16px">${card("Outliers: age at enrolment", esc(ages.note || ""), chartBox("c-ages"))}</div>` : ""}`;
   }
   if (p === "wellbeing") {
     const labels = { sad: "Sadness", sleep_code: "Sleep", active_code: "Physical activity", social_media_code: "Social media", bullied_school: "Bullied at school" };
     addChart(() => Charts.hbars($("#c-proc"), X.skipped.map((r) => ({ label: labels[r.question] || r.question, value: r.share })), { fmt: (v) => percent(v, 1), min: 0, labelWidth: 130 }));
-    const assoc = X.course_association;
-    addChart(() => Charts.hbars($("#c-proc2"), Object.entries(assoc).map(([option, a]) => ({
-      label: option === "raw" ? `Raw text (${a.n_groups} groups)` : `Cleaned (${a.n_groups} groups)`, value: a.cramers_v,
-      color: option === "raw" ? "var(--critical)" : "var(--series-1)" })), { fmt: (v) => number(v, 2), min: 0, max: 1, labelWidth: 150 }));
-    challenge = `<div class="grid g2">
-      ${card("Share of students who skipped each question", "Skipping is far more common for some questions, so 'drop incomplete answers' is not neutral", chartBox("c-proc"))}
-      ${card("Text cleaning: course names in the Malaysia survey", "Strength of the course–depression association (0 = none, 1 = perfect). 48 one-person 'courses' create a fake association", chartBox("c-proc2"))}</div>`;
+    challenge = card("Share of students who skipped each question", "Skipping is far more common for some questions, so dropping incomplete answers is not neutral", chartBox("c-proc"));
   }
   if (p === "energy") {
-    const hist = (X.histograms || [])[0];
     addChart(() => Charts.hbars($("#c-proc"), X.gaps.map((r) => ({ label: r.meter.replace("_", " "), value: r.share })), { fmt: (v) => percent(v, 0), min: 0, labelWidth: 110 }));
-    if (hist) addChart(() => Charts.histogram($("#c-proc2"), hist.bins, {}));
-    challenge = `<div class="grid g2">
-      ${card("Hours with no reading, per meter", "The hostel meters were silent in about a quarter of all hours", chartBox("c-proc"))}
-      ${hist ? card(esc(hist.label), esc(hist.note || ""), chartBox("c-proc2")) : ""}</div>`;
+    challenge = card("Hours with no reading, per meter",
+      "The hostel meters were silent in about a quarter of all hours; by default those hours are dropped", chartBox("c-proc"));
   }
   const log = table(pulse.log, [
     { label: "Step", value: (r) => r.step },
@@ -260,11 +224,6 @@ function statisticsPanel(p, pulse, X) {
     { label: "IQR", numeric: true, value: (r) => `${number(r.q1)} – ${number(r.q3)}` },
     { label: "Min – max", numeric: true, value: (r) => `${number(r.min)} – ${number(r.max)}` },
   ]);
-  let histograms = "";
-  (X.histograms || []).forEach((h, i) => {
-    addChart(() => Charts.histogram($(`#c-hist-${i}`), h.bins, { highlight: h.label.startsWith("Semester-1 grade") ? (b) => b.lo === 0 : null }));
-    histograms += card(esc(h.label), esc(h.note || ""), chartBox(`c-hist-${i}`));
-  });
   const ids = Object.keys(pulse.findings);
   const tests = table(ids, [
     { label: "Finding", html: true, value: (id) => `<b>${id}</b> ${esc(shortName(id, pulse.findings[id]))}` },
@@ -275,7 +234,6 @@ function statisticsPanel(p, pulse, X) {
     { label: "Decision (5%)", value: (id) => pulse.evidence[id].test.decision },
   ]);
   return card("Descriptive statistics", "After the default cleaning choices", describe)
-    + (histograms ? `<div class="grid g2" style="margin-top:16px">${histograms}</div>` : "")
     + `<div style="margin-top:16px">${card("Hypothesis tests, one per finding",
         "Simple tests from the course: a z-test to compare two percentages, a t-test to compare two means, a chi-square test for two categories. With thousands of rows almost every test rejects H0, so the size of the difference (Findings) matters more than p.", tests)}</div>`;
 }
@@ -300,7 +258,8 @@ function reductionPanel(p, pulse, X) {
   const v = D.variance;
   const styles = groupStyles(D.categories);
   addChart(() => Charts.scatter($("#c-pca"), D.pca, styles, { xLabel: `PC1 (${percent(v[0], 0)})`, yLabel: `PC2 (${percent(v[1], 0)})` }));
-  addChart(() => Charts.scatter($("#c-tsne"), D.tsne, styles, { axes: false, xLabel: "t-SNE 1", yLabel: "t-SNE 2" }));
+  const showTsne = D.n_unique >= 200;   // with few distinct rows t-SNE only scatters copies of the same points
+  if (showTsne) addChart(() => Charts.scatter($("#c-tsne"), D.tsne, styles, { axes: false, xLabel: "t-SNE 1", yLabel: "t-SNE 2" }));
   addChart(() => {
     let cumulative = 0;
     const rows = v.map((x, i) => { cumulative += x; return { label: `PC${i + 1}`, value: x, tip: `<b>PC${i + 1}</b><br>${percent(x)}; cumulative ${percent(cumulative)}` }; });
@@ -316,7 +275,7 @@ function reductionPanel(p, pulse, X) {
       which the methods never see, so any separation is structure already in the data.${overlap}</p>
     <div class="grid g2">
       ${card("PCA: first two components", `Together they explain ${percent(v[0] + v[1], 0)} of the variance`, chartBox("c-pca"))}
-      ${card("t-SNE", `Non-linear map of a ${D.tsne.length}-row sample; only local neighbourhoods are meaningful`, chartBox("c-tsne"))}
+      ${showTsne ? card("t-SNE", `Non-linear map of a ${D.tsne.length}-row sample; only local neighbourhoods are meaningful`, chartBox("c-tsne")) : ""}
       ${card("Variance explained by each component", "", chartBox("c-scree"))}
       ${card("What PC1 and PC2 are made of", "Features with the largest loadings", loadings)}
     </div>`;
@@ -341,10 +300,7 @@ function rulesPanel(p, pulse, X) {
        <p class="small"><b>What the data says:</b> the opposite. When the "if" side is true, the outcome happens in ${percent(r.confidence, 0)} of
        records, against ${percent(r.base_rate, 0)} overall.</p>`);
   }
-  return `<p class="muted small">Apriori (L18) checks associations people take for granted. Lift = how many times the overall rate the "then"
-      happens when the "if" is true: above 1 = more often, below 1 = <b>less</b> often. Each rule below sounds like common sense, but has a
-      lift below 1. Co-occurrence, not cause.</p>
-    <div class="grid g2">${cards || `<p class="muted">No rules exported.</p>`}</div>`;
+  return `    <div class="grid g2">${cards || `<p class="muted">No rules exported.</p>`}</div>`;
 }
 
 /* --- 5. Clustering */
@@ -352,7 +308,7 @@ function rulesPanel(p, pulse, X) {
 function clusteringPanel(p, pulse, X) {
   const M = X.cluster_map;
   const C = X.clusters;
-  const methodNames = { kmeans: "K-Means", agglo: "Ward (hierarchical)", dbscan: "DBSCAN", optics: "OPTICS" };
+  const methodNames = { kmeans: "K-Means", dbscan: "DBSCAN", optics: "OPTICS" };
   const metrics = table((M && M.metrics) || (C && C.metrics) || [], [
     { label: "Method", value: (r) => methodNames[r.method] || r.method },
     { label: "Groups", numeric: true, value: (r) => r.n_clusters },
@@ -377,7 +333,7 @@ function clusteringPanel(p, pulse, X) {
   if (M) addChart(() => Charts.scatter($("#c-clu"), M.points, groupStyles(M.groups), { xLabel: "PC1", yLabel: "PC2" }));
   return notesCard(X.cluster_notes) + `<div class="grid g2">
       ${M ? card("K-Means groups on the first two principal components", `Sample of ${M.points.length.toLocaleString()}; DBSCAN left ${percent(M.noise_share, 0)} outside every group`, chartBox("c-clu")) : ""}
-      ${card("Four methods compared", "Silhouette runs from −1 to 1: above 0.5 = clearly separated groups, 0.25–0.5 = real but overlapping, below 0.25 = weak", metrics)}
+      ${card("Three methods compared", "Silhouette runs from −1 to 1: above 0.5 = clearly separated groups, 0.25–0.5 = real but overlapping, below 0.25 = weak", metrics)}
     </div>
     ${profiles ? `<div style="margin-top:16px">${card("What each group looks like", "", profiles)}</div>` : ""}`;
 }
@@ -433,7 +389,13 @@ function extraAnswer(p, X) {
       "Weighted share of students (CDC YRBS 2023): lowest at 8 hours, higher with less and with much more sleep", chartBox("c-answer"))}</div>`;
   }
   if (p === "energy") {
-    return `<div class="callout" style="margin-top:16px">The institute calendar marks teaching days and low-activity days (weekends,
+    addChart(() => Charts.lines($("#c-answer"), [
+      { label: "Teaching days", color: "var(--series-2)", points: X.load_curve.map((r) => ({ x: r.hour, y: r.teaching })) },
+      { label: "Low-activity days", color: "var(--series-1)", points: X.load_curve.map((r) => ({ x: r.hour, y: r.low })) },
+    ], { fmt: (v) => v.toFixed(0), unit: " kW", xTicks: [0, 3, 6, 9, 12, 15, 18, 21, 23], xFmt: (h) => `${h}:00` }));
+    return `<div style="margin-top:16px">${card("A day in the academic building",
+      "Mean power at each hour (kW). Teaching days rise from about 8:00 and stay high until evening; nights are almost the same on both", chartBox("c-answer"))}</div>
+      <div class="callout" style="margin-top:16px">The institute calendar marks teaching days and low-activity days (weekends,
       holidays, vacations). It does <b>not</b> mark exams, so this pulse makes no claim about exams. Delhi's long vacation falls in the
       hottest months, which is why EN3 compares term and vacation inside the same month.</div>`;
   }
@@ -487,31 +449,51 @@ function robustnessPage() {
   $("#app").innerHTML = html;
 }
 
-/* ------------------------------------------------------------------ method page */
+/* ------------------------------------------------------------------ conclusions page */
 
-function methodPage() {
-  const F = DATA.forensics;
-  $("#app").innerHTML = `<h1>Method</h1>
-    <ol class="findings">
-      <li><b>Real data only.</b> Each dataset is downloaded and documented (source, licence, size).</li>
-      <li><b>Clean with a log.</b> Each step records rows before and after, and why.</li>
-      <li><b>Name the choices.</b> Where analysts could reasonably differ, the choice is a decision with options.</li>
-      <li><b>Analyse:</b> descriptive statistics, simple hypothesis tests (z, t, chi-square), PCA / t-SNE, association rules, clustering.</li>
-      <li><b>Stress-test:</b> recompute every finding under each alternative choice.</li>
-    </ol>
-    <h2>Why we changed dataset</h2>
-    ${F && F.available ? `<p>Our first dataset (student lifestyle) was generated, not collected: in ${F.rows_summing_to_24.toLocaleString()} of
-      ${F.rows.toLocaleString()} rows the five "hours per day" add up to exactly 24, and a depth-3 decision tree reproduces its stress level
-      with ${percent(F.tree_accuracy[2].accuracy, 0)} accuracy. Its "findings" were just the formula that generated it.</p>` : ""}
+function conclusionsPage() {
+  const A = DATA.pulses.academic, W = DATA.pulses.wellbeing, E = DATA.pulses.energy;
+  const v = (pulse, id) => pulse.robustness.values[id].DEFAULT;
+  const tl = A.extras.timeline.find((r) => r.stage.includes("semester 1"));
+  const a3 = A.robustness.values.A3["zero_grade=as_score"] / v(A, "A3");
+  const bandLow = (A.evidence.A4.tests || [])[0];
+  let holds = 0, tested = 0;
+  for (const p of PULSES) { holds += DATA.pulses[p].robustness.summary.holds; tested += DATA.pulses[p].robustness.summary.tested; }
+  $("#app").innerHTML = `<h1>Conclusions</h1>
+    <h2>① Academic: who drops out, and how early can we tell?</h2>
+    <ul class="notes">
+      <li>After semester 1, contacting the 25% highest-risk students reaches ${percent(tl.capture_at_25pct, 0)} of all future dropouts
+        (the most such a list can reach is ${percent(tl.max_possible_capture, 0)}). Semester 1 is the moment to act.</li>
+      <li>Debtors drop out ${formatFinding("A1", v(A, "A1"))} more often, and students without a scholarship ${formatFinding("A2", v(A, "A2"))} more often.</li>
+      <li>Debt still matters among students with similar semester-1 results, except those already failing${bandLow ? ` (p = ${pValue(bandLow.p)} there)` : ""}.</li>
+      <li>A grade of 0 is a missing exam, not a score: treating it as a score would make the grade gap ${number(a3, 1)}× too big.</li>
+    </ul>
+    <h2>② Wellbeing: which behaviours co-occur with persistent sadness?</h2>
+    <ul class="notes">
+      <li>Bullying has the strongest link (${formatFinding("W2", v(W, "W2"))}), then sleeping under 8 hours (${formatFinding("W1", v(W, "W1"))}),
+        then no physical activity (${formatFinding("W3", v(W, "W3"))}). All three tests reject H0.</li>
+      <li>All three hold under every cleaning choice, including weighted and unweighted rates.</li>
+    </ul>
+    <h2>③ Energy: when does a campus building behave differently, and why?</h2>
+    <ul class="notes">
+      <li>The academic building uses ${formatFinding("EN1", v(E, "EN1"))} more on teaching days; the hostels use ${formatFinding("EN2", v(E, "EN2"))} more at night in term.</li>
+      <li>Compared within the same month (season removed) the term effect is ${formatFinding("EN3", v(E, "EN3"))}, but with few comparable months
+        the test is not significant (p = ${pValue(E.evidence.EN3.test.p)}).</li>
+    </ul>
+    <h2>The umbrella question</h2>
+    <ul class="notes">
+      <li>${holds} of ${tested} finding × cleaning-choice checks hold: most findings are solid.</li>
+      <li>A few reasonable-looking choices change the answer (treating missing exams as 0, filling meter gaps), so cleaning
+        decisions should be reported next to the numbers.</li>
+    </ul>
     <h2>Limitations</h2>
-    <ul>
+    <ul class="notes">
       <li>Three institutions in three countries, none of them ours: we compare conclusions, never join rows.</li>
       <li>All findings are associations, not causes.</li>
-      <li>YRBS is a high-school survey; the Malaysia survey has 101 respondents.</li>
+      <li>YRBS is a high-school survey, not university students.</li>
       <li>The energy calendar has no exam dates, so we compare teaching days and vacations instead.</li>
       <li>Decisions are changed one at a time; combinations are not tested.</li>
-    </ul>
-    <p class="small muted">Data exported ${esc(DATA.generated)}.</p>`;
+    </ul>`;
 }
 
 /* ------------------------------------------------------------------ navigation */
@@ -523,7 +505,7 @@ function topBar(current) {
     links += `<a href="#/${p}/processing" class="${current === p ? "active" : ""}">${m.num} ${m.title}</a>`;
   }
   links += `<a href="#/robustness" class="${current === "robustness" ? "active" : ""}">Robustness</a>`;
-  links += `<a href="#/method" class="${current === "method" ? "active" : ""}">Method</a>`;
+  links += `<a href="#/conclusions" class="${current === "conclusions" ? "active" : ""}">Conclusions</a>`;
   $("#tabs").innerHTML = links;
 }
 
@@ -533,7 +515,7 @@ function showPage() {
   topBar(page);
   if (PULSES.includes(page)) pulsePage(page, panel);
   else if (page === "robustness") robustnessPage();
-  else if (page === "method") methodPage();
+  else if (page === "conclusions") conclusionsPage();
   else overviewPage();
   drawCharts();
 }

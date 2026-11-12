@@ -3,12 +3,10 @@
 Datasets
 - CDC YRBS 2023, national high-school survey (20,103 students). Built by scripts/preprocess_yrbs.py,
   which gives every question a plain column name (sad, sleep_hours, bullied_school, ...).
-- Malaysia university mental-health survey (101 students) with 49 messy spellings of course names.
 
 Main data challenges
 - Skipped answers: about 1% skip the sadness question but 13% skip sleep and 24% skip social media.
 - YRBS is a weighted sample, so unweighted rates are not national estimates.
-- Free-text course names need cleaning before any comparison by course.
 
 Every finding is a signed number; positive means the claim holds.
 """
@@ -23,62 +21,34 @@ from campuspulse.common import stats_tests, reduce, clustering, rules
 
 ROOT = Path(__file__).resolve().parents[2]
 YRBS_FILE = ROOT / "data" / "processed" / "wellbeing" / "yrbs_2023.csv"
-MALAYSIA_FILE = ROOT / "data" / "raw" / "student_mh" / "Student Mental health.csv"
 
 DECISIONS = {
     "missing_handling":       ["drop", "impute_mode", "indicator"],   # skipped behaviour questions
     "sleep_cutoff":           ["less_than_8hrs", "less_than_7hrs", "less_than_6hrs"],  # CDC uses < 8 h
     "survey_weights":         ["weighted", "unweighted"],
-    "course_standardization": ["fuzzy_canonical", "raw"],             # Malaysia course text
 }
 
 FINDINGS = {
     "W1": "Sleep-deprived students report persistent sadness more often (rate difference)",
     "W2": "Bullied students (at school or online) report persistent sadness more often (rate difference)",
     "W3": "Physically inactive students (0 active days a week) report persistent sadness more often (rate difference)",
-    "W4": "Malaysia survey: course discipline is associated with depression (Cramer's V; exploratory, n=101)",
 }
 
 SLEEP_LIMIT = {"less_than_8hrs": 8, "less_than_7hrs": 7, "less_than_6hrs": 6}
 BEHAVIOUR_COLUMNS = ["sleep_hours", "bullied_school", "bullied_online", "active_days"]
 
 
-def load_raw() -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_raw() -> pd.DataFrame:
     if not YRBS_FILE.exists():
         raise FileNotFoundError(f"{YRBS_FILE} not found. Run: python scripts/download_data.py --pulse yrbs "
                                 f"then python scripts/preprocess_yrbs.py")
-    malaysia = pd.read_csv(MALAYSIA_FILE) if MALAYSIA_FILE.exists() else pd.DataFrame()
-    return pd.read_csv(YRBS_FILE), malaysia
+    return pd.read_csv(YRBS_FILE)
 
 
-def normalize_courses(series: pd.Series) -> pd.Series:
-    """Map 49 free-text course spellings to 7 disciplines with keyword rules (L9 text features)."""
-    rules_by_discipline = [
-        ("Engineering", ["engin", "koe", "enm", "benl"]),
-        ("Computing & IT", ["bit", "bcs", "it", "cts", "mathem"]),
-        ("Law", ["law"]),
-        ("Islamic Studies", ["islam", "irkhs", "kirkhs", "usuluddin", "taasl", "fiqh"]),
-        ("Business & Economics", ["kenms", "account", "bank", "business", "econ"]),
-        ("Health & Life Sciences", ["nurs", "biomed", "biotech", "radio", "marine"]),
-        ("Humanities & Social Sciences", ["psych", "human", "comm", "malcom", "mhsc", "ala", "kop", "tesl"]),
-    ]
-
-    def to_discipline(text):
-        if not isinstance(text, str):
-            return "Other"
-        text = text.strip().lower()
-        for discipline, keywords in rules_by_discipline:
-            if any(k in text for k in keywords):
-                return discipline
-        return "Other"
-
-    return series.apply(to_discipline)
-
-
-def clean(decisions: dict, log: DecisionLog | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+def clean(decisions: dict, log: DecisionLog | None = None) -> pd.DataFrame:
     log = log if log is not None else DecisionLog()
     decisions = {k: (v[0] if isinstance(v, list) else v) for k, v in decisions.items()}   # accept DECISIONS itself
-    yrbs, malaysia = load_raw()
+    yrbs = load_raw()
     log.step("load_raw", 0, len(yrbs), "CDC YRBS 2023 national high-school survey")
 
     # 1. The outcome must be answered
@@ -118,16 +88,7 @@ def clean(decisions: dict, log: DecisionLog | None = None) -> tuple[pd.DataFrame
         yrbs["w"] = 1.0
         log.step("survey_weights", len(yrbs), len(yrbs), "Unweighted sample rates", "unweighted")
 
-    # 5. Malaysia course text
-    if not malaysia.empty:
-        if decisions.get("course_standardization", "fuzzy_canonical") == "fuzzy_canonical":
-            malaysia["course_clean"] = normalize_courses(malaysia["What is your course?"])
-            why = "49 course spellings mapped to 7 disciplines"
-        else:
-            malaysia["course_clean"] = malaysia["What is your course?"].astype(str).str.strip()
-            why = "Raw course text kept"
-        log.step("course_text", len(malaysia), len(malaysia), why, decisions.get("course_standardization", "fuzzy_canonical"))
-    return yrbs, malaysia
+    return yrbs
 
 
 def sadness_rate(df: pd.DataFrame, mask) -> float:
@@ -136,22 +97,12 @@ def sadness_rate(df: pd.DataFrame, mask) -> float:
     return float(np.average(group["sadness"], weights=group["w"])) if group["w"].sum() > 0 else float("nan")
 
 
-def course_depression_association(malaysia: pd.DataFrame) -> dict:
-    """Cramer's V between course and depression. Raw text has ~48 tiny groups, which inflates V by sparsity alone."""
-    if malaysia.empty or "course_clean" not in malaysia:
-        return dict(cramers_v=float("nan"), p=float("nan"), n_groups=0)
-    depressed = malaysia["Do you have Depression?"].eq("Yes").astype(int)
-    r = stats_tests.chi2_test(malaysia["course_clean"], depressed)
-    return dict(cramers_v=float(r["cramers_v"]), p=float(r["p"]), n_groups=int(malaysia["course_clean"].nunique()))
-
-
 def run_pipeline(decisions: dict) -> dict[str, float]:
-    d, malaysia = clean(decisions)
+    d = clean(decisions)
     return {
         "W1": sadness_rate(d, d["sleep_deprived"] == 1) - sadness_rate(d, d["sleep_deprived"] == 0),
         "W2": sadness_rate(d, d["bullied"] == 1) - sadness_rate(d, d["bullied"] == 0),
         "W3": sadness_rate(d, d["inactive"] == 1) - sadness_rate(d, d["inactive"] == 0),
-        "W4": course_depression_association(malaysia)["cramers_v"],
     }
 
 
@@ -212,10 +163,7 @@ def _proportion_test(d, column, name):
 
 def finding_evidence(decisions: dict | None = None) -> dict:
     """For every finding: the bars its graph needs and one simple hypothesis test from the course."""
-    d, malaysia = clean(decisions or {k: v[0] for k, v in DECISIONS.items()})
-    depressed = malaysia["Do you have Depression?"].eq("Yes")
-    by_course = malaysia.assign(dep=depressed).groupby("course_clean")["dep"].agg(["mean", "size"]).sort_values("mean", ascending=False)
-    chi = stats_tests.chi2_test(malaysia["course_clean"], depressed.astype(int))
+    d = clean(decisions or {k: v[0] for k, v in DECISIONS.items()})
     return {
         "W1": dict(kind="rate", unit="persistent sadness",
                    bars=_sadness_bars(d, "sleep_deprived", {1: "Sleep-deprived", 0: "Enough sleep"}),
@@ -224,10 +172,6 @@ def finding_evidence(decisions: dict | None = None) -> dict:
                    test=_proportion_test(d, "bullied", "among bullied and not-bullied students")),
         "W3": dict(kind="rate", unit="persistent sadness", bars=_sadness_bars(d, "inactive", {1: "Inactive (0 days)", 0: "Active"}),
                    test=_proportion_test(d, "inactive", "among inactive and active students")),
-        "W4": dict(kind="rate", unit="share reporting depression (Malaysia survey)",
-                   bars=[dict(label=c, value=float(r["mean"]), n=int(r["size"])) for c, r in by_course.iterrows()],
-                   test=stats_tests.test_result("Chi-square test of independence", "Depression is independent of course",
-                                                "chi2", chi["chi2"], chi["p"])),
     }
 
 

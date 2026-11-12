@@ -1,4 +1,4 @@
-"""KMeans / Agglomerative / DBSCAN / OPTICS + metrics (compare >= 2 methods).
+"""K-Means / DBSCAN / OPTICS + silhouette (compare the methods).
 
 Two rules every pulse gets for free here:
 1. Features are standardised first. Otherwise the column with the biggest units
@@ -7,7 +7,7 @@ Two rules every pulse gets for free here:
    are sorted (by course, by date), so the first n rows are not representative.
 """
 import numpy as np, pandas as pd
-from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN, OPTICS
+from sklearn.cluster import KMeans, DBSCAN, OPTICS
 from sklearn.metrics import silhouette_score, davies_bouldin_score
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
@@ -34,7 +34,7 @@ def run_all(X, k=4, eps=None, min_samples=10, scale=True):
     Xs = StandardScaler().fit_transform(X) if scale else X
     Xs = np.nan_to_num(Xs)
     eps = choose_eps(Xs, min_samples) if eps is None else eps
-    models = {"kmeans": KMeans(k, n_init=10, random_state=0), "agglo": AgglomerativeClustering(k),
+    models = {"kmeans": KMeans(k, n_init=10, random_state=0),
               "dbscan": DBSCAN(eps=eps, min_samples=min_samples), "optics": OPTICS(min_samples=min_samples)}
     rows, labels = [], {}
     for name, m in models.items():

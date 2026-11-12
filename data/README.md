@@ -19,19 +19,16 @@ This directory documents the data sources, licenses, schemas, time spans, real-o
 
 ---
 
-## 2. Wellbeing Pulse: CDC YRBS + Malaysia Student Mental Health Survey
+## 2. Wellbeing Pulse: CDC YRBS 2023
 - **Source 1 (CDC YRBS)**: Centers for Disease Control and Prevention (CDC) Youth Risk Behavior Surveillance System (2023/2025 release).
-- **Source 2 (Malaysia Survey)**: Public University Student Mental Health Survey (Malaysia), Kaggle.
 - **Citation**: Centers for Disease Control and Prevention. *Youth Risk Behavior Surveillance System (YRBSS)*.
 - **License**: Public Domain (CDC US Government Work) / Open Dataset.
 - **Format & Size**:
   - YRBS: Microsoft Access MDB (35.5 MB) exported to processed CSV (`data/processed/wellbeing/yrbs_xxhqn.csv`, 10,710 respondents × 153 variables).
-  - Malaysia: CSV (7.3 KB, 101 respondents × 11 variables).
 - **Time Span**: Modern surveillance cohorts.
 - **Real-or-Synthetic Evidence**: Real survey responses. Exhibits authentic skip patterns, item non-response on sensitive behavioral questions (suicidality, substance abuse, sexual violence), and authentic typographical variance.
 - **Known Challenges & Quirks**:
   1. *Sensitive Question Non-Response*: Missing data is non-random; respondents with acute distress occasionally skip specific behavioral probes.
-  2. *Unstructured Free-Text*: The Malaysia survey contains 49 different unstandardized spellings and abbreviations for degree courses (e.g. `engin`, `Engineering`, `KOE`, `KIRKHS`, `Laws`, `Law`), requiring fuzzy string matching and text normalization.
 
 ---
 
