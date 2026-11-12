@@ -67,6 +67,7 @@ def clean(decisions: dict, log: DecisionLog | None = None) -> pd.DataFrame:
     log = log if log is not None else DecisionLog()
     df = load_raw()
     log.step("load_raw", 0, len(df), "Initial raw UCI dropout cohort load")
+    raw_hidden = int(((df[GRADE] == 0) & (df[ENROLLED1] > 0)).sum())   # ungraded zeros before any row is removed
 
     # 1. Enrolled status handling (right-censored outcome)
     if _val(decisions, "enrolled", "drop") == "drop":
@@ -88,8 +89,9 @@ def clean(decisions: dict, log: DecisionLog | None = None) -> pd.DataFrame:
         df["grade_missing"] = hidden.astype(int)
         df.loc[hidden | no_units, GRADE] = np.nan
         log.step("zero_grade_to_missing", before, len(df),
-                 f"{int(hidden.sum())} enrolled-but-ungraded zeros -> NaN + flag (MNAR); "
-                 f"{int(no_units.sum())} with 0 enrolled units -> NaN (not applicable)", "nan_plus_flag")
+                 f"{int(hidden.sum())} students enrolled in units but graded 0 -> grade set to missing + grade_missing = 1 "
+                 f"(of {raw_hidden} in the raw file; the other {raw_hidden - int(hidden.sum())} were 'Enrolled' students removed above). "
+                 f"{int(no_units.sum())} with 0 enrolled units -> missing (nothing to grade)", "nan_plus_flag")
     elif zero_mode == "drop":
         df = df[~(hidden | no_units)].copy()
         log.step("drop_zero_grades", before, len(df), "Dropped every row whose semester-1 grade is 0", "drop")
@@ -106,11 +108,6 @@ def clean(decisions: dict, log: DecisionLog | None = None) -> pd.DataFrame:
     else:
         log.step("keep_no_units", len(df), len(df), "Kept students with 0 enrolled semester-1 units (flagged)", "keep")
 
-    # 4. Macroeconomic columns take only 10 distinct values = one per entry cohort. They are kept as a
-    #    cohort_id for cohort-level tests and left OUT of every per-student feature matrix.
-    df["cohort_id"] = df[ECON].astype(str).agg("|".join, axis=1).astype("category").cat.codes
-    log.step("macro_as_cohort", len(df), len(df),
-             f"Unemployment/inflation/GDP -> cohort_id ({df['cohort_id'].nunique()} cohorts); excluded from student features", "cohort_id")
     return df
 
 
@@ -153,11 +150,10 @@ def run_stats(df: pd.DataFrame) -> dict:
     z_debt = stats_tests.two_proportion_z(x1, n1, x2, n2)
     top_courses = df["Course"].value_counts().index[:4]
     anova_courses = stats_tests.anova_f(*[df.loc[df["Course"] == c, GRADE].dropna() for c in top_courses])
-    t_cohort = stats_tests.chi2_test(df["cohort_id"], df["dropout"])
     _, strat = stratified_debt_effect(df)
-    pv = [t_debtor["p"], t_schol["p"], t_grade["p"], z_debt["p"], anova_courses["p"], t_cohort["p"]]
+    pv = [t_debtor["p"], t_schol["p"], t_grade["p"], z_debt["p"], anova_courses["p"]]
     return {"debtor_chi2": t_debtor, "scholarship_chi2": t_schol, "grade_t": t_grade, "debtor_z": z_debt,
-            "course_anova": anova_courses, "cohort_chi2": t_cohort, "debt_within_grade_bands": strat,
+            "course_anova": anova_courses, "debt_within_grade_bands": strat,
             "bonferroni": stats_tests.bonferroni(pv)}
 
 
@@ -175,7 +171,7 @@ def detect_outliers(df: pd.DataFrame) -> dict:
 def get_feature_matrix(df: pd.DataFrame) -> pd.DataFrame:
     """Numeric QUANTITIES only (codes and IDs excluded), median-filled, for PCA / clustering."""
     num_cols = df.select_dtypes(include=[np.number]).columns
-    features = [c for c in num_cols if c not in CODED + ECON + ["dropout", "cohort_id"]]
+    features = [c for c in num_cols if c not in CODED + ECON + ["dropout"]]   # ECON = same value for a whole entry year
     X = df[features]
     return X.fillna(X.median())
 
@@ -207,15 +203,16 @@ def run_clustering(df: pd.DataFrame, k: int = 3) -> tuple[pd.DataFrame, pd.DataF
     profiles = sub_df.groupby("cluster").agg(
         size=("dropout", "count"), dropout_rate=("dropout", "mean"), mean_grade=(GRADE, "mean"),
         debtor_rate=("Debtor", "mean"), scholarship_rate=("Scholarship holder", "mean"),
-        mean_age=("Age at enrollment", "mean")).round(3)
+        mean_age=("Age at enrollment", "mean"), units_enrolled=(ENROLLED1, "mean"),
+        units_passed=(APPROVED1, "mean"), units_credited=("Curricular units 1st sem (credited)", "mean")).round(3)
     noise = labels["dbscan"] == -1
     if noise.any():
         profiles.loc["DBSCAN noise", ["size", "dropout_rate"]] = [int(noise.sum()), round(sub_df.loc[noise, "dropout"].mean(), 3)]
     return metrics, profiles
 
 
-def run_rules(df: pd.DataFrame) -> pd.DataFrame:
-    """Apriori rules with dropout as the consequent (L18), on binned student attributes."""
+def rule_items(df: pd.DataFrame) -> pd.DataFrame:
+    """One transaction per student: binned attributes as yes/no items (L18)."""
     sub = pd.DataFrame({
         "debtor": df["Debtor"].map({1: "yes", 0: "no"}),
         "fees_up_to_date": df["Tuition fees up to date"].map({1: "yes", 0: "no"}),
@@ -223,10 +220,24 @@ def run_rules(df: pd.DataFrame) -> pd.DataFrame:
         "age": pd.cut(df["Age at enrollment"], [0, 20, 25, 100], labels=["<=20", "21-25", "26+"]),
         "sem1_approval": pd.cut(df["approval_rate_sem1"], [-0.01, 0.5, 0.99, 1.0], labels=["low", "mid", "all"]),
         "sem1_grade_missing": df.get("grade_missing", pd.Series(0, index=df.index)).map({1: "yes", 0: "no"}),
+        "displaced": df["Displaced"].map({1: "yes", 0: "no"}),
+        "international": df["International"].map({1: "yes", 0: "no"}),
         "dropout": df["dropout"].map({1: "1", 0: "0"}),
     }).dropna()
-    onehot = pd.get_dummies(sub)
-    return rules.mine_rules(onehot, min_support=0.03, min_lift=1.2, min_conf=0.5, consequent_prefix="dropout_1")
+    return pd.get_dummies(sub)
+
+
+def run_rules(df: pd.DataFrame) -> pd.DataFrame:
+    """All strong Apriori rules with dropout as the consequent."""
+    return rules.mine_rules(rule_items(df), min_support=0.03, min_lift=1.2, min_conf=0.5, consequent_prefix="dropout_1")
+
+
+def surprising_rules(df: pd.DataFrame) -> list:
+    """Associations people expect, which the data contradicts (lift < 1)."""
+    return rules.surprising_rules(rule_items(df), {
+        "displaced": (["displaced_yes"], "dropout_1", "Students who moved away from home struggle more and drop out more"),
+        "international": (["international_yes"], "dropout_1", "International students, far from home, drop out more"),
+    })
 
 
 def run_timeline(df: pd.DataFrame, top_share: float = 0.25, seed: int = 0) -> pd.DataFrame:
@@ -261,3 +272,47 @@ def run_autoencoder(df: pd.DataFrame) -> np.ndarray:
     """Autoencoder reconstruction error as an anomaly score on a random sample (L16)."""
     X = clustering.sample_rows(get_feature_matrix(df), 300)
     return reduce.autoencoder_scores(X.values, bottleneck=4, epochs=30)
+
+
+# ---------------------------------------------------------------- evidence for each finding (graph + simple test)
+
+def _rate_bars(df, column, labels):
+    """Dropout rate per group, e.g. debtors vs non-debtors. labels = {value: display name}."""
+    bars = []
+    for value, label in labels.items():
+        group = df[df[column] == value]
+        bars.append(dict(label=label, value=float(group["dropout"].mean()), n=int(len(group))))
+    return bars
+
+
+def _proportion_test(df, column, yes, no, name):
+    a, b = df[df[column] == yes], df[df[column] == no]
+    z = stats_tests.two_proportion_z(int(a["dropout"].sum()), len(a), int(b["dropout"].sum()), len(b))
+    return stats_tests.test_result("Two-proportion z-test", f"Dropout rate is the same for {name}", "z", z["z"], z["p"])
+
+
+def finding_evidence(decisions: dict | None = None) -> dict:
+    """For every finding: the bars its graph needs and one simple hypothesis test from the course."""
+    df = clean(decisions or {k: v[0] for k, v in DECISIONS.items()})
+    graded = df.dropna(subset=[GRADE])
+    persist, drop = graded[graded["dropout"] == 0][GRADE], graded[graded["dropout"] == 1][GRADE]
+    t = stats_tests.welch_t(persist, drop)
+    _, bands = stratified_debt_effect(df)
+    band_tests = []
+    for b in bands.itertuples():
+        in_band = df[pd.cut(df["approval_rate_sem1"], [-0.01, 0.5, 0.99, 1.0], labels=["low (<=50%)", "mid", "all passed"]) == b.band]
+        band_tests.append(_proportion_test(in_band, "Debtor", 1, 0, f"debtors and non-debtors ({b.band} band)") | {"band": b.band})
+    return {
+        "A1": dict(kind="rate", unit="dropout rate", bars=_rate_bars(df, "Debtor", {1: "Debtors", 0: "Non-debtors"}),
+                   test=_proportion_test(df, "Debtor", 1, 0, "debtors and non-debtors")),
+        "A2": dict(kind="rate", unit="dropout rate", bars=_rate_bars(df, "Scholarship holder", {0: "No scholarship", 1: "Scholarship"}),
+                   test=_proportion_test(df, "Scholarship holder", 0, 1, "students with and without a scholarship")),
+        "A3": dict(kind="mean", unit="mean semester-1 grade (out of 20)",
+                   bars=[dict(label="Persisted", value=float(persist.mean()), n=int(len(persist))),
+                         dict(label="Dropped out", value=float(drop.mean()), n=int(len(drop)))],
+                   test=stats_tests.test_result("Two-sample t-test (Welch)", "Mean semester-1 grade is the same for persisters and dropouts",
+                                                "t", t["t"], t["p"])),
+        "A4": dict(kind="gap", unit="debtors minus non-debtors, dropout rate",
+                   bars=[dict(label=b.band, value=float(b.gap), n=int(b.n)) for b in bands.itertuples()],
+                   test=band_tests[1] if len(band_tests) > 1 else band_tests[0], tests=band_tests),
+    }

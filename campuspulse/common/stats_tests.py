@@ -41,3 +41,9 @@ def conclude(p: float, if_significant: str, alpha: float = 0.05, n_tests: int = 
     if p < a:
         return f"DECISION: reject H0 (p = {p:.2e} < {a:.3g}). {if_significant}"
     return f"DECISION: fail to reject H0 (p = {p:.2e} >= {a:.3g}). No evidence for: {if_significant}"
+
+
+def test_result(test: str, null: str, statistic_name: str, statistic: float, p: float, alpha: float = 0.05) -> dict:
+    """One simple hypothesis test, ready to print: what was tested, the statistic, p and the decision at 5%."""
+    return dict(test=test, null=null, statistic_name=statistic_name, statistic=float(statistic), p=float(p),
+                decision="reject H0" if p < alpha else "do not reject H0")

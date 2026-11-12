@@ -80,8 +80,9 @@
         return;
       }
       const p = el("path", { d: hbarPath(sx(base), sx(r.value), by, bh), fill: r.color || "var(--series-1)" }, s);
-      const lx = r.value >= 0 ? sx(r.value) + 6 : sx(r.value) - 6;
-      el("text", { x: lx, y: y + rowH / 2 + 4, "text-anchor": r.value >= 0 ? "start" : "end", class: "value-label" }, s).textContent = fmt(r.value);
+      // negative bars: print the value just right of the zero line, so it never collides with the row label
+      const lx = r.value >= 0 ? sx(r.value) + 6 : sx(base) + 6;
+      el("text", { x: lx, y: y + rowH / 2 + 4, "text-anchor": "start", class: "value-label" }, s).textContent = fmt(r.value);
       const hit = el("rect", { x: x0, y, width: x1 - x0 + 50, height: rowH, fill: "transparent" }, s);
       hover(hit, r.tip || `<b>${r.label}</b><br>${fmt(r.value)}`);
       hover(p, r.tip || `<b>${r.label}</b><br>${fmt(r.value)}`);

@@ -185,7 +185,7 @@ def run_clustering(d: pd.DataFrame, k: int = 4) -> tuple[pd.DataFrame, pd.DataFr
     profiles = sample.groupby("group").agg(
         size=("sadness", "count"), sadness_rate=("sadness", "mean"), sleep_deprived_rate=("sleep_deprived", "mean"),
         bullied_rate=("bullied", "mean"), inactive_rate=("inactive", "mean"),
-        heavy_social_media_rate=("heavy_social_media", "mean")).round(3)
+        heavy_social_media_rate=("heavy_social_media", "mean"), female_share=("female", "mean")).round(3)
     return metrics, profiles
 
 
@@ -193,3 +193,52 @@ def mine_sadness_rules(d: pd.DataFrame) -> pd.DataFrame:
     """Apriori: which combinations of behaviours go with persistent sadness? (L18)"""
     items = d[["sleep_deprived", "bullied", "inactive", "heavy_social_media", "female", "sadness"]].astype(bool)
     return rules.mine_rules(items, min_support=0.04, min_lift=1.1, min_conf=0.4, consequent_prefix="sadness")
+
+
+# ---------------------------------------------------------------- evidence for each finding (graph + simple test)
+
+def _sadness_bars(d, column, labels):
+    """Weighted share reporting persistent sadness per group. labels = {value: display name}."""
+    return [dict(label=label, value=sadness_rate(d, d[column] == value), n=int((d[column] == value).sum()))
+            for value, label in labels.items()]
+
+
+def _proportion_test(d, column, name):
+    """Two-proportion z-test on the sample counts (weights are used for the rates shown, not for the test)."""
+    a, b = d[d[column] == 1], d[d[column] == 0]
+    z = stats_tests.two_proportion_z(int(a["sadness"].sum()), len(a), int(b["sadness"].sum()), len(b))
+    return stats_tests.test_result("Two-proportion z-test", f"Persistent sadness is equally common {name}", "z", z["z"], z["p"])
+
+
+def finding_evidence(decisions: dict | None = None) -> dict:
+    """For every finding: the bars its graph needs and one simple hypothesis test from the course."""
+    d, malaysia = clean(decisions or {k: v[0] for k, v in DECISIONS.items()})
+    depressed = malaysia["Do you have Depression?"].eq("Yes")
+    by_course = malaysia.assign(dep=depressed).groupby("course_clean")["dep"].agg(["mean", "size"]).sort_values("mean", ascending=False)
+    chi = stats_tests.chi2_test(malaysia["course_clean"], depressed.astype(int))
+    return {
+        "W1": dict(kind="rate", unit="persistent sadness",
+                   bars=_sadness_bars(d, "sleep_deprived", {1: "Sleep-deprived", 0: "Enough sleep"}),
+                   test=_proportion_test(d, "sleep_deprived", "with and without enough sleep")),
+        "W2": dict(kind="rate", unit="persistent sadness", bars=_sadness_bars(d, "bullied", {1: "Bullied", 0: "Not bullied"}),
+                   test=_proportion_test(d, "bullied", "among bullied and not-bullied students")),
+        "W3": dict(kind="rate", unit="persistent sadness", bars=_sadness_bars(d, "inactive", {1: "Inactive (0 days)", 0: "Active"}),
+                   test=_proportion_test(d, "inactive", "among inactive and active students")),
+        "W4": dict(kind="rate", unit="share reporting depression (Malaysia survey)",
+                   bars=[dict(label=c, value=float(r["mean"]), n=int(r["size"])) for c, r in by_course.iterrows()],
+                   test=stats_tests.test_result("Chi-square test of independence", "Depression is independent of course",
+                                                "chi2", chi["chi2"], chi["p"])),
+    }
+
+
+def surprising_rules(d: pd.DataFrame) -> list:
+    """Associations people expect, which the data contradicts (lift < 1)."""
+    items = pd.DataFrame({
+        "heavy_social_media": d["heavy_social_media"] == 1, "enough_sleep": d["sleep_hours"] >= 8,
+        "inactive": d["inactive"] == 1, "male": d["sex"] == 2, "sadness": d["sadness"] == 1,
+    })
+    return rules.surprising_rules(items, {
+        "social_media": (["heavy_social_media", "enough_sleep"], "sadness",
+                         "Heavy social-media users are sadder than other teenagers"),
+        "inactive_boys": (["inactive", "male"], "sadness", "Teenagers who never exercise are sadder than average"),
+    })

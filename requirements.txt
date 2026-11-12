@@ -7,10 +7,10 @@ mlxtend
 matplotlib
 seaborn
 pyarrow
-streamlit
 ucimlrepo
 requests
 rapidfuzz
 pyreadstat
 torch
 pytest
+nbformat

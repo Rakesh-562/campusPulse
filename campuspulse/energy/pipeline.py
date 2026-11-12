@@ -199,3 +199,58 @@ def mine_energy_rules(df: pd.DataFrame) -> pd.DataFrame:
     }).dropna()
     return rules.mine_rules(pd.get_dummies(items), min_support=0.03, min_lift=1.2, min_conf=0.5,
                             consequent_prefix="power_demand_hi_power")
+
+
+# ---------------------------------------------------------------- evidence for each finding (graph + simple test)
+
+def finding_evidence(decisions: dict | None = None) -> dict:
+    """For every finding: the bars its graph needs and one simple hypothesis test from the course."""
+    from scipy import stats as st
+    df = clean(decisions or {k: v[0] for k, v in DECISIONS.items()})
+    day = df[(df["hour"] >= 9) & (df["hour"] < 18)] if "hour" in df else df
+    nights = night_rows(df)
+    teach, low = day.loc[day["is_teaching"] == 1, "Academic"], day.loc[day["is_teaching"] == 0, "Academic"]
+    term, vac = nights.loc[nights["is_vacation"] == 0, "total_hostel_power"], nights.loc[nights["is_vacation"] == 1, "total_hostel_power"]
+    t1, t2 = stats_tests.welch_t(teach, low), stats_tests.welch_t(term, vac)
+    _, months = term_vs_vacation_within_month(df)
+    t3, p3 = st.ttest_1samp(months["diff"], 0.0) if len(months) >= 2 else (float("nan"), float("nan"))
+    kw = lambda s: float(s.mean() / 1000)
+    return {
+        "EN1": dict(kind="mean", unit="academic building, mean power 9:00-18:00 (kW)",
+                    bars=[dict(label="Teaching days", value=kw(teach), n=int(len(teach))),
+                          dict(label="Low-activity days", value=kw(low), n=int(len(low)))],
+                    test=stats_tests.test_result("Two-sample t-test (Welch)", "Mean daytime power is the same on teaching and low-activity days",
+                                                 "t", t1["t"], t1["p"])),
+        "EN2": dict(kind="mean", unit="hostels, mean power 00:00-05:00 (kW)",
+                    bars=[dict(label="Term", value=kw(term), n=int(len(term))), dict(label="Vacation", value=kw(vac), n=int(len(vac)))],
+                    test=stats_tests.test_result("Two-sample t-test (Welch)", "Mean night-time hostel power is the same in term and vacation",
+                                                 "t", t2["t"], t2["p"])),
+        "EN3": dict(kind="gap", unit="term minus vacation, night-time hostel power (kW), months that have both",
+                    bars=[dict(label=r.month, value=float(r.diff / 1000), n=int(r.vacation_rows)) for r in months.itertuples()],
+                    test=stats_tests.test_result("One-sample t-test on the monthly differences", "The average same-month difference is 0",
+                                                 "t", t3, p3)),
+    }
+
+
+def finding_rule_items(df: pd.DataFrame) -> pd.DataFrame:
+    """One transaction per hour: calendar, time of day, season, and academic / hostel load levels (low / mid / high thirds)."""
+    items = pd.DataFrame({
+        "day": df["is_teaching"].map({1: "teaching_day", 0: "low_activity_day"}),
+        "period": df["is_vacation"].map({1: "vacation", 0: "term"}),
+        "time": pd.cut(df["datetime"].dt.hour, [-1, 5, 9, 17, 23], labels=["night", "morning", "daytime", "evening"]),
+        "season": df["datetime"].dt.month.map(delhi_season),
+        "week": df["is_weekend"].map({1: "weekend", 0: "weekday"}),
+        "month": df["datetime"].dt.strftime("%b"),
+        "academic": pd.qcut(df["Academic"], 3, labels=["low", "mid", "high"]),
+        "hostels": pd.qcut(df["total_hostel_power"], 3, labels=["low", "mid", "high"]),
+        "campus": pd.qcut(df["total_campus_power"], 3, labels=["low", "mid", "high"]),
+    }).dropna()
+    return pd.get_dummies(items)
+
+
+def surprising_rules(df: pd.DataFrame) -> list:
+    """Associations people expect, which the data contradicts (lift < 1)."""
+    return rules.surprising_rules(finding_rule_items(df), {
+        "weekend": (["week_weekend"], "hostels_high", "Students spend weekends in their rooms, so hostels use more power"),
+        "june": (["month_Jun"], "campus_high", "June, Delhi's hottest month, is when the campus uses the most power (air-conditioning)"),
+    })

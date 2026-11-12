@@ -19,22 +19,7 @@ This directory documents the data sources, licenses, schemas, time spans, real-o
 
 ---
 
-## 2. Engagement Pulse: OULAD (Open University Learning Analytics Dataset)
-- **Source**: Knowledge Media Institute, The Open University, United Kingdom.
-- **Citation**: Kuzilek, J., Hlosta, M., & Zdrahal, Z. (2017). *Open University Learning Analytics dataset*. Scientific Data, 4:170171.
-- **License**: Creative Commons Attribution 4.0 International (CC BY 4.0).
-- **Format & Size**: Multi-table relational dataset (7 CSVs); `studentVle.csv` click logs is ~433 MB uncompressed (`data/raw/oulad/`).
-- **Dimensions**: 32,593 unique students, 22 course presentations across 7 modules; 10,655,280 VLE click events.
-- **Time Span**: 2013–2014 academic course presentations (February "B" and October "J" cohorts).
-- **Real-or-Synthetic Evidence**: Real VLE server interaction logs. Exhibits realistic diurnal, weekly, and assessment deadline burst patterns, long-tailed power-law activity distributions, and student dropout drop-off.
-- **Known Challenges & Quirks**:
-  1. *Volume & Granularity*: 10+ million interaction records must be resampled and aggregated into weekly engagement matrices (`data/processed/engagement/weekly_clicks.parquet`).
-  2. *Extreme Activity Spikes*: Assessment submission dates generate sharp, noisy click spikes requiring smoothing (e.g. rolling averages vs exponential smoothing).
-  3. *Missing Assessment Grades*: Students who disengage early do not submit later assessments.
-
----
-
-## 3. Wellbeing Pulse: CDC YRBS + Malaysia Student Mental Health Survey
+## 2. Wellbeing Pulse: CDC YRBS + Malaysia Student Mental Health Survey
 - **Source 1 (CDC YRBS)**: Centers for Disease Control and Prevention (CDC) Youth Risk Behavior Surveillance System (2023/2025 release).
 - **Source 2 (Malaysia Survey)**: Public University Student Mental Health Survey (Malaysia), Kaggle.
 - **Citation**: Centers for Disease Control and Prevention. *Youth Risk Behavior Surveillance System (YRBSS)*.
@@ -50,22 +35,7 @@ This directory documents the data sources, licenses, schemas, time spans, real-o
 
 ---
 
-## 4. Food Pulse: NOVANIMAL Canteen Menu Sales Experiment
-- **Source**: ZHAW Zurich University of Applied Sciences, Switzerland.
-- **Citation**: Egeler, C., & Baur, I. (2020). *Aggregated menu sales data from two university canteens (NOVANIMAL)*. Zenodo.
-- **License**: Creative Commons Attribution 4.0 International (CC BY 4.0).
-- **Format & Size**: CSV, ~5.8 MB (`data/raw/novanimal/2017_ZHAW_aggregated_menu_sales_NOVANIMAL.csv`).
-- **Dimensions**: 26,340 transaction records across 2 university canteens (Grüental and Vista).
-- **Time Span**: 12-week controlled field experiment during Spring semester 2017.
-- **Real-or-Synthetic Evidence**: Real point-of-sale till transactions from university cafeterias. Contains verified sales amounts, Swiss Franc price tiers, weather metrics (rain, temperature, sunshine), and customer group tags (`Studierende`, `Mitarbeiter`).
-- **Known Challenges & Quirks**:
-  1. *Experimental Design*: Alternating Basis (baseline) and Intervention cycles where vegetarian/vegan buffet shares and prominence were expanded.
-  2. *Strong Weekly Seasonality & Outliers*: Mondays and Fridays exhibit lower on-campus attendance; public holidays create zero-sales anomalies that must be distinguished from consumer rejection.
-  3. *Aggregated Item Sales*: Data represents till aggregates per meal line rather than individual patron longitudinal tracking.
-
----
-
-## 5. Energy Pulse: I-BLEND IIIT Delhi Smart Campus
+## 3. Energy Pulse: I-BLEND IIIT Delhi Smart Campus
 - **Source**: Indraprastha Institute of Information Technology Delhi (IIITD), India.
 - **Citation**: Rashid, H., Singh, P., & Singh, A. (2019). *I-BLEND: a campus-scale commercial and residential building electrical energy dataset*. figshare.
 - **License**: figshare Academic Open Access / CC BY 4.0.
