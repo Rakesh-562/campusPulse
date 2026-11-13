@@ -121,8 +121,12 @@ def stratified_debt_effect(df: pd.DataFrame) -> tuple[float, pd.DataFrame]:
     rows = []
     for b, g in df.groupby(band, observed=True):
         if g["Debtor"].nunique() == 2 and (g["Debtor"] == 1).sum() >= 10:
+            debtor_rate = _rate(g, "Debtor", 1)
+            non_debtor_rate = _rate(g, "Debtor", 0)
             rows.append(dict(band=b, n=len(g), n_debtors=int((g["Debtor"] == 1).sum()),
-                             gap=_rate(g, "Debtor", 1) - _rate(g, "Debtor", 0),
+                             n_non_debtors=int((g["Debtor"] == 0).sum()),
+                             debtor_dropout_rate=debtor_rate, non_debtor_dropout_rate=non_debtor_rate,
+                             gap=debtor_rate - non_debtor_rate,
                              cramers_v=stats_tests.chi2_test(g["Debtor"], g["dropout"])["cramers_v"]))
     tab = pd.DataFrame(rows)
     return (float(tab["gap"].mean()) if len(tab) else float("nan")), tab

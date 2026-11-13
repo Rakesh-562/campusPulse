@@ -236,15 +236,38 @@
     el("text", { x: m.l + 4, y: m.t + 10, class: "small" }, s).textContent = opts.yLabel || "";
     const byKey = Object.fromEntries(cats.map((c) => [c.key, c]));
     // draw the largest group first so smaller groups stay visible on top
-    const order = cats.map((c) => c.key).sort((a, b) => points.filter((p) => p.c === b).length - points.filter((p) => p.c === a).length);
+    const order = cats.map((c) => c.key).sort((a, b) =>
+      points.filter((p) => p.c === b).reduce((sum, p) => sum + (p.n || 1), 0)
+      - points.filter((p) => p.c === a).reduce((sum, p) => sum + (p.n || 1), 0));
+    const coordinateGroups = new Map();
+    points.forEach((p) => {
+      const key = `${p.x},${p.y}`;
+      if (!coordinateGroups.has(key)) coordinateGroups.set(key, []);
+      coordinateGroups.get(key).push(p);
+    });
+    const radiusFor = (p) => p.n ? Math.min(9, 3 + 0.18 * Math.sqrt(p.n)) : 4;
     order.forEach((key) => points.filter((p) => p.c === key).forEach((p) => {
       const c = byKey[key] || { color: "var(--muted)", label: key };
+      const count = p.n || 1;
+      const coordinatePeers = coordinateGroups.get(`${p.x},${p.y}`);
+      const peers = [...new Set(coordinatePeers.map((point) => point.c))];
+      if (opts.offsetCategoryToRight && peers.includes(opts.offsetCategoryToRight)) {
+        peers.splice(peers.indexOf(opts.offsetCategoryToRight), 1);
+        peers.push(opts.offsetCategoryToRight);
+      }
+      const peerRadius = Math.max(...coordinatePeers.map(radiusFor));
+      const offsetX = peers.length > 1 ? (peers.indexOf(p.c) - (peers.length - 1) / 2) * (peerRadius * 2 + 1) : 0;
+      const radius = radiusFor(p);
+      const cx = sx(p.x) + offsetX;
+      const tipText = p.n
+        ? `<b>${c.label}</b><br>${count.toLocaleString()} students<br>x ${p.x.toFixed(2)} · y ${p.y.toFixed(2)}`
+        : `<b>${c.label}</b><br>x ${p.x.toFixed(2)} · y ${p.y.toFixed(2)}`;
       const dot = el("circle", c.ring
-        ? { cx: sx(p.x), cy: sy(p.y), r: 3.5, fill: "none", stroke: c.color, "stroke-width": 1.5, opacity: 0.85 }
-        : { cx: sx(p.x), cy: sy(p.y), r: 4, fill: c.color, stroke: "var(--surface)", "stroke-width": 1, "fill-opacity": 0.75 }, s);
-      hover(dot, `<b>${c.label}</b><br>x ${p.x.toFixed(2)} · y ${p.y.toFixed(2)}`);
+        ? { cx, cy: sy(p.y), r: radius, fill: "none", stroke: c.color, "stroke-width": 1.5, opacity: 0.85 }
+        : { cx, cy: sy(p.y), r: radius, fill: c.color, stroke: "var(--surface)", "stroke-width": 1, "fill-opacity": 0.75 }, s);
+      hover(dot, tipText);
     }));
-    legend(container, cats.map((c) => [c.color, `${c.label} (${points.filter((p) => p.c === c.key).length})`]));
+    legend(container, cats.map((c) => [c.color, `${c.label} (${points.filter((p) => p.c === c.key).reduce((sum, p) => sum + (p.n || 1), 0)})`]));
   }
 
   /* Histogram, single series. bins [{lo,hi,n}] */

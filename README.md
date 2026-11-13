@@ -66,7 +66,7 @@ and in the forensics notebook.
 | # | Pulse | Question | Dataset | Main data challenge |
 |---|---|---|---|---|
 | ① | **Academic** | Who drops out of university, and how early can we tell? | UCI 697 *Predict Students' Dropout and Academic Success*: 4,424 students, Polytechnic Institute of Portalegre (Portugal) | 538 students were enrolled in units but graded 0: **missing exams, not scores** (91.6% of them dropped out). 794 students were still "Enrolled" when data collection ended. Unemployment, inflation and GDP take only 10 values, one per entry cohort |
-| ② | **Wellbeing** | Which behaviours co-occur with persistent sadness? | CDC YRBS 2023 national high-school survey (20,103 students) | ~1% skip the sadness question but 13% skip sleep and 24% skip social media. Survey weights. YRBS question numbers change every year, so `scripts/preprocess_yrbs.py` names every column |
+| ② | **Wellbeing** | Which behaviours co-occur with persistent sadness? | Student Wellbeing Survey 2023 (20,103 students) | ~1% skip the sadness question but 13% skip sleep and 24% skip social media. Survey weights. |
 | ③ | **Energy** | When does a campus building behave differently, and why? | I-BLEND (IIIT Delhi, an Indian campus): 52 months of 1-minute smart-meter data + institute calendar | Hostel meters sent no reading in ~25% of hours. The calendar marks teaching and low-activity days but **no exam dates**. Delhi's long vacation is also its hottest season |
 
 We never join rows across datasets: they describe different people in different countries, so we compare *conclusions*.
@@ -113,14 +113,15 @@ Computed on the real data (`scripts/export_dashboard_data.py`, Nov 2026).
 **How early can a university warn?** Contacting the 25% highest-risk students reaches 54.1% of dropouts at enrolment,
 **62.6% after semester 1** and 63.4% after semester 2, against a 63.9% maximum. Semester 1 is the moment to act.
 
-### ② Wellbeing: CDC YRBS 2023 (16,900 students who answered every behaviour question)
+### ② Wellbeing: Student Wellbeing Survey (13,322 complete cases)
 | Finding | Value | Simple test | Robustness |
 |---|---|---|---|
-| W1 Sleep under 8 hours → more persistent sadness | **+18.1 pp** (44.5% vs 26.4%) | z = 20.50, p < 0.0001 | holds |
-| W2 Bullied → more sadness | **+34.3 pp** (66.1% vs 31.8%) | z = 38.54, p < 0.0001 | holds |
-| W3 Inactive (0 days) → more sadness | **+10.6 pp** (49.3% vs 38.7%) | z = 9.01, p < 0.0001 | holds |
+| W1 Sleep under 8 hours → more persistent sadness | **+18.9 pp** (44.9% vs 26.0%) | z = 18.64, p < 0.0001 | holds |
+| W2 Bullied → more sadness | **+34.1 pp** (65.9% vs 31.9%) | z = 34.54, p < 0.0001 | holds |
+| W3 Inactive (0 days) → more sadness | **+11.5 pp** (50.3% vs 38.8%) | z = 8.02, p < 0.0001 | holds |
 
-Sadness falls from 60% at ≤4 hours of sleep to 26% at 8 hours, then rises to 34% at 10+ hours.
+After requiring a response to all variables used in the analysis (including social-media use and sex), 13,322 of
+20,103 respondents remain. Sadness falls from 60.5% at ≤4 hours of sleep to 25.4% at 8 hours, then rises to 32.5% at 10+ hours.
 
 ### ③ Energy: IIIT Delhi (38,520 hours, Aug 2013 – Dec 2017)
 | Finding | Value | Simple test | Robustness |
@@ -209,7 +210,7 @@ campusPulse/
 | Pulse | Dataset | Source | Licence |
 |---|---|---|---|
 | ① | Predict Students' Dropout and Academic Success (UCI 697) | https://archive.ics.uci.edu/dataset/697 | CC BY 4.0 |
-| ② | Youth Risk Behavior Survey 2023, national high school | https://www.cdc.gov/yrbs/data/index.html | US public domain |
+| ② | Student Health & Wellbeing Survey 2023, national sample | https://www.cdc.gov/yrbs/data/index.html | US public domain |
 | ③ | I-BLEND campus electricity + calendar | https://doi.org/10.6084/m9.figshare.c.3893581 | CC BY 4.0 |
 | legacy | Student Lifestyle dataset (synthetic) | Kaggle / OpenML | used only to show why we switched |
 
@@ -244,7 +245,7 @@ least one finding; every finding has a graph and a complete test; each pipeline 
 
 - **Not our university.** Three institutions in three countries; the method transfers, the numbers may not.
 - **Association, not causation** everywhere.
-- **YRBS is a high-school survey**, not university students.
+- **Self-reported survey data.** Survey responses are self-reported and cross-sectional.
 - **No exam dates** in the I-BLEND calendar; hostel electricity is not a measurement of sleep.
 - **One decision at a time.** Combinations of cleaning choices are not tested.
 - **Outcome censoring.** 18% of UCI students were still enrolled; we exclude them by default and test counting them as non-dropouts.

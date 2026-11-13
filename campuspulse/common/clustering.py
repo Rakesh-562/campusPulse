@@ -49,6 +49,19 @@ def run_all(X, k=4, eps=None, min_samples=10, scale=True):
     return pd.DataFrame(rows), labels
 
 
+def run_kmeans(X, k=4, silhouette_sample_size=1200):
+    """Fit K-Means on all rows and estimate its silhouette on a manageable random subset."""
+    X = np.asarray(X, dtype=float)
+    Xs = np.nan_to_num(StandardScaler().fit_transform(X))
+    labels = KMeans(k, n_init=10, random_state=0).fit_predict(Xs)
+    sample_size = min(silhouette_sample_size, len(Xs))
+    silhouette = silhouette_score(Xs, labels, sample_size=sample_size, random_state=0)
+    metrics = pd.DataFrame([dict(method="kmeans", n_clusters=len(np.unique(labels)), noise_share=0.0,
+                                 silhouette=silhouette, silhouette_sample_size=sample_size,
+                                 davies_bouldin=np.nan, eps=np.nan)])
+    return metrics, labels
+
+
 def profile(df: pd.DataFrame, labels) -> pd.DataFrame:
     """Mean of every numeric column per cluster: use this to NAME the clusters."""
     return df.assign(cluster=labels).groupby("cluster").mean(numeric_only=True).round(2)

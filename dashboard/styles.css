@@ -49,6 +49,7 @@ h3 { font-size: 1.02rem; }
 p { margin: 0 0 .8em; max-width: 72ch; }
 .muted { color: var(--muted); }
 .small { font-size: .86rem; }
+.band-interpretation { max-width: none; }
 code { font-size: .86em; background: var(--surface-2); padding: .1em .35em; border-radius: 4px; }
 
 /* ---- header / nav */
@@ -162,3 +163,11 @@ details.card summary { cursor: pointer; padding: 2px 0 8px; }
 /* interpretation bullets */
 ul.notes { margin: 4px 0 0; padding-left: 20px; }
 ul.notes li { margin-bottom: 6px; max-width: 110ch; }
+
+/* ---- standard pipeline */
+.pipeline-flow { list-style: none; counter-reset: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; padding: 0; margin: 14px 0 0; }
+.pipeline-step { position: relative; min-width: 0; padding: 14px 14px 16px; background: var(--surface); border: 1px solid var(--border); }
+.pipeline-step:not(:last-child)::after { content: "↓"; position: absolute; z-index: 1; top: auto; right: 50%; bottom: -22px; transform: translateX(50%); color: var(--muted); font-size: 1.2rem; }
+.pipeline-num { display: block; color: var(--muted); font-size: .75rem; font-weight: 650; letter-spacing: .06em; margin-bottom: 10px; }
+.pipeline-title { font-weight: 650; font-size: .98rem; color: var(--ink); margin-bottom: 6px; line-height: 1.3; }
+.pipeline-desc { font-size: .84rem; color: var(--ink-2); line-height: 1.45; }

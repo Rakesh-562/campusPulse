@@ -32,7 +32,6 @@ const SHORT = {
   W1: "Sleep-deprived students report more sadness", W2: "Bullied students report more sadness",
   W3: "Inactive students report more sadness",
   EN1: "Academic building uses more on teaching days", EN2: "Hostels use more at night in term than vacation",
-  EN3: "Term-vs-vacation difference within the same month",
 };
 
 /* ------------------------------------------------------------------ small helpers */
@@ -67,6 +66,16 @@ function formatFinding(id, v) {
 }
 
 function shortName(id, claim) { return SHORT[id] || claim; }
+
+function displayedFindingIds(p, pulse) {
+  return Object.keys(pulse.findings).filter((id) => !(p === "energy" && id === "EN3"));
+}
+
+function displayedRobustnessCounts(pulse, ids) {
+  const variants = pulse.robustness.variants.filter((variant) => variant !== "DEFAULT");
+  const statuses = ids.flatMap((id) => variants.map((variant) => pulse.robustness.status[id][variant]));
+  return { holds: statuses.filter((status) => status === "holds").length, tested: statuses.length };
+}
 
 function niceVariant(v) { return v === "DEFAULT" ? "our default" : v.replace("=", " = ").replace(/_/g, " "); }
 
@@ -127,11 +136,41 @@ function overviewPage() {
     cards += `<a class="card link" href="#/${p}/processing"><div class="sub">${m.num} ${m.title}</div>
       <h3>${esc(m.question)}</h3><p class="small muted">${esc(m.dataset)} · ${esc(m.source)}</p></a>`;
   }
+  const pipeline = `
+    <ol class="pipeline-flow">
+      <li class="pipeline-step">
+        <span class="pipeline-num">01</span>
+        <div class="pipeline-title">Load the raw data</div>
+        <div class="pipeline-desc">Open datasets go into a standard pipeline</div>
+      </li>
+      <li class="pipeline-step">
+        <span class="pipeline-num">02</span>
+        <div class="pipeline-title">Log the decisions</div>
+        <div class="pipeline-desc">Rows in and out, the reason, and 2 to 3 options per choice</div>
+      </li>
+      <li class="pipeline-step">
+        <span class="pipeline-num">03</span>
+        <div class="pipeline-title">Clean with a setting</div>
+        <div class="pipeline-desc">The same code runs with each option</div>
+      </li>
+      <li class="pipeline-step">
+        <span class="pipeline-num">04</span>
+        <div class="pipeline-title">Analyse</div>
+        <div class="pipeline-desc">Hypothesis tests and machine learning</div>
+      </li>
+      <li class="pipeline-step">
+        <span class="pipeline-num">05</span>
+        <div class="pipeline-title">Check robustness</div>
+        <div class="pipeline-desc">Check whether findings hold under different data-cleaning choices</div>
+      </li>
+    </ol>`;
+
   $("#app").innerHTML = `
     <h1>CampusPulse</h1>
     <div class="question"><b>Umbrella question.</b> Can routine campus data warn a university early enough to act, and how
     much do those warnings depend on our data-cleaning decisions?</div>
-    <h2>Three questions, three real datasets</h2><div class="grid g3">${cards}</div>`;
+    <h2>Three questions, three real datasets</h2><div class="grid g3">${cards}</div>
+    <h2>Standard data pipeline for all pulses</h2>${pipeline}`;
 }
 
 /* ------------------------------------------------------------------ pulse page */
@@ -164,7 +203,7 @@ function pulsePage(p, panelId) {
 
   $("#app").innerHTML = header + `<nav class="pills" aria-label="Deliverables">${buttons}</nav><div id="panel"></div>`;
   $("#panel").innerHTML = show(p, pulse, pulse.extras);
-  if (show === findingsPanel) connectExplorer(pulse);
+  if (show === findingsPanel) connectExplorer(p, pulse);
 }
 
 /* --- 1. Data processing: the data challenge, its graphs, and the cleaning log */
@@ -174,31 +213,53 @@ function processingPanel(p, pulse, X) {
   if (p === "academic") {
     const z = X.hidden_zeros;
     const grades = (X.histograms || []).find((h) => h.label.startsWith("Semester-1 grade"));
-    if (grades) addChart(() => Charts.histogram($("#c-grades"), grades.bins, { highlight: (b) => b.lo === 0 }));
-    const ages = (X.histograms || []).find((h) => h.label.startsWith("Age"));
-    if (ages) addChart(() => Charts.histogram($("#c-ages"), ages.bins, { fmt: (v) => v.toFixed(0), unit: "students" }));
-    addChart(() => Charts.hbars($("#c-proc"), X.a3_by_zero_grade.map((r) => ({
-      label: { nan_plus_flag: "0 = missing (default)", as_score: "0 = real score", drop: "drop those rows" }[r.option] || r.option,
-      value: r.value, color: r.option === "as_score" ? "var(--critical)" : "var(--series-1)" })), { fmt: (v) => v.toFixed(2), labelWidth: 150 }));
-    challenge = `<div class="grid g3">
+    if (grades) addChart(() => Charts.histogram($("#c-processing-grades"), grades.bins, { highlight: (b) => b.lo === 0 }));
+
+    challenge = `<div class="grid g2">
       <div class="card tile"><div class="label">Enrolled in units but graded 0 (raw file)</div><div class="value">${z.n}</div>
         <div class="note">${percent(z.dropout_rate)} dropped out (others: ${percent(z.dropout_rate_others)}). A 0 here is a missing exam, not a score,
         so the grade is set to missing and flagged. ${z.n - z.n_after_enrolled} were still 'Enrolled' and are removed with them, leaving ${z.n_after_enrolled}.</div></div>
       <div class="card tile"><div class="label">No enrolled units in semester 1</div><div class="value">${z.no_units}</div>
-        <div class="note">${z.no_units_graduated} still graduated, so 0 is not failure.</div></div>
-      ${card("Grade gap (A3) under each treatment of 0", "Persisters minus dropouts, out of 20", chartBox("c-proc"))}</div>
-      ${grades ? `<div style="margin-top:16px">${card(esc(grades.label), esc(grades.note || ""), chartBox("c-grades"))}</div>` : ""}
-      ${ages ? `<div style="margin-top:16px">${card("Outliers: age at enrolment", esc(ages.note || ""), chartBox("c-ages"))}</div>` : ""}`;
+        <div class="note">${z.no_units_graduated} still graduated, so 0 is not failure. Kept under our default choice.</div></div>
+    </div>${grades ? `<div style="margin-top:16px">${card(esc(grades.label), esc(grades.note || ""), chartBox("c-processing-grades"))}</div>` : ""}`;
   }
   if (p === "wellbeing") {
-    const labels = { sad: "Sadness", sleep_code: "Sleep", active_code: "Physical activity", social_media_code: "Social media", bullied_school: "Bullied at school" };
-    addChart(() => Charts.hbars($("#c-proc"), X.skipped.map((r) => ({ label: labels[r.question] || r.question, value: r.share })), { fmt: (v) => percent(v, 1), min: 0, labelWidth: 130 }));
-    challenge = card("Share of students who skipped each question", "Skipping is far more common for some questions, so dropping incomplete answers is not neutral", chartBox("c-proc"));
+    const labels = { sad: "Sadness", sleep_code: "Sleep", active_code: "Physical activity", social_media_code: "Social media",
+      bullied_school: "Bullied at school", bullied_online: "Bullied online", sex: "Sex" };
+    const skipped = (X.skipped || []).map((r) => ({
+      label: labels[r.question] || r.question,
+      value: r.share,
+      tip: `<b>${esc(labels[r.question] || r.question)}</b><br>${percent(r.share, 1)} skipped`,
+    })).sort((a, b) => b.value - a.value);
+    addChart(() => Charts.hbars($("#c-wb-missing"), skipped, {
+      fmt: (v) => percent(v, 1), min: 0, max: 0.25, tickFmt: (v) => percent(v, 0), labelWidth: 150,
+    }));
+    challenge = `<div class="card">
+      <h3>Missing-answer patterns in survey data</h3>
+      <div class="sub">Skipping is far more common for some questions, so dropping incomplete answers is not neutral</div>
+      ${chartBox("c-wb-missing")}
+      <p class="small muted" style="margin-top:10px">Survey answers are recoded into readable 0/1 indicators. Complete-case analysis removes records with missing fields, while missing-flags preserve sample size.</p>
+    </div>`;
   }
   if (p === "energy") {
-    addChart(() => Charts.hbars($("#c-proc"), X.gaps.map((r) => ({ label: r.meter.replace("_", " "), value: r.share })), { fmt: (v) => percent(v, 0), min: 0, labelWidth: 110 }));
-    challenge = card("Hours with no reading, per meter",
-      "The hostel meters were silent in about a quarter of all hours; by default those hours are dropped", chartBox("c-proc"));
+    const meterLabels = {
+      Academic: "Academic building", Lecture: "Lecture building", Library: "Library", Mess: "Mess",
+      Facilities: "Facilities", Boys_main: "Boys hostel (main)", Boys_backup: "Boys hostel (backup)",
+      Girls_main: "Girls hostel (main)", Girls_backup: "Girls hostel (backup)",
+    };
+    const gaps = (X.gaps || []).map((r) => ({
+      label: meterLabels[r.meter] || r.meter.replace(/_/g, " "),
+      value: r.share,
+      tip: `<b>${esc(meterLabels[r.meter] || r.meter.replace(/_/g, " "))}</b><br>${percent(r.share, 1)} of hourly readings missing`,
+    })).sort((a, b) => b.value - a.value);
+    addChart(() => Charts.hbars($("#c-energy-gaps"), gaps, {
+      fmt: (v) => percent(v, 1), min: 0, max: 0.3, tickFmt: (v) => percent(v, 0), labelWidth: 170,
+    }));
+    challenge = `<div class="card">
+      <h3>Missing hourly readings by meter</h3>
+      <div class="sub">Hostel meters miss about a quarter of hourly readings; the default choice drops hours without readings</div>
+      ${chartBox("c-energy-gaps")}
+    </div>`;
   }
   const log = table(pulse.log, [
     { label: "Step", value: (r) => r.step },
@@ -214,6 +275,97 @@ function processingPanel(p, pulse, X) {
 /* --- 2. Statistics: descriptive table, distributions and one simple test per finding */
 
 function statisticsPanel(p, pulse, X) {
+  let statOverview = "";
+  if (p === "energy") {
+    addChart(() => Charts.lines($("#c-energy-load-curve"), [
+      { label: "Teaching days", color: "var(--series-2)", points: X.load_curve.map((r) => ({ x: r.hour, y: r.teaching })) },
+      { label: "Low-activity days", color: "var(--series-1)", points: X.load_curve.map((r) => ({ x: r.hour, y: r.low })) },
+    ], { fmt: (v) => v.toFixed(0), unit: " kW", xTicks: [0, 3, 6, 9, 12, 15, 18, 21, 23], xFmt: (h) => `${h}:00` }));
+    statOverview = `<div style="margin-bottom:16px">
+      ${card("A day in the academic building",
+        "Mean power at each hour (kW). Teaching days rise from about 8:00 and stay high until evening; nights are almost the same on both.",
+        chartBox("c-energy-load-curve"))}
+      <div class="callout" style="margin-top:16px">The institute calendar marks teaching days and low-activity days (weekends,
+      holidays, vacations). It does <b>not</b> mark exams, so this pulse makes no claim about exams. Delhi's long vacation falls in the
+      hottest months, so term-versus-vacation comparisons may also reflect seasonal differences.</div>
+    </div>`;
+  }
+  if (p === "wellbeing") {
+    const weightedBars = (rows) => rows.map((row) => ({
+      label: row.label,
+      value: row.share,
+      tip: `<b>${esc(row.label)}</b><br>Weighted share: ${percent(row.share, 1)}<br>${row.n.toLocaleString()} respondents`,
+    }));
+    addChart(() => Charts.hbars($("#c-wb-sleep-dist"), weightedBars(X.sleep_distribution), {
+      fmt: (v) => percent(v, 0), min: 0, labelWidth: 100,
+    }));
+    addChart(() => Charts.hbars($("#c-wb-indicator-prev"), weightedBars(X.indicator_prevalence), {
+      fmt: (v) => percent(v, 0), min: 0, labelWidth: 180,
+    }));
+    statOverview = `<div class="grid g2" style="margin-bottom:16px">
+      ${card("School-night sleep distribution", "Weighted share by reported sleep category", chartBox("c-wb-sleep-dist"))}
+      ${card("Derived wellbeing indicators", "Weighted prevalence of the yes/no measures used in the analysis", chartBox("c-wb-indicator-prev"))}
+    </div>`;
+  }
+  if (p === "academic" && X.outcomes && pulse.evidence.A1 && pulse.evidence.A2) {
+    const outcomeColors = { Graduate: "var(--series-1)", Dropout: "var(--critical)", Enrolled: "var(--muted)" };
+    const outcomeBars = X.outcomes.map((o) => ({
+      label: o.label,
+      value: o.share,
+      color: outcomeColors[o.label] || "var(--series-1)",
+      tip: `<b>${esc(o.label)}</b><br>${percent(o.share, 1)} (${o.n.toLocaleString()} of 4,424 students)`
+    }));
+    addChart(() => Charts.hbars($("#c-stat-outcomes"), outcomeBars, {
+      fmt: (v) => percent(v, 1),
+      min: 0,
+      max: 0.6,
+      labelWidth: 110
+    }));
+
+    const outcomeGroups = {
+      debt: [
+        { label: "Debtors", evidence: "A1", category: "Debtors" },
+        { label: "Non-debtors", evidence: "A1", category: "Non-debtors" },
+      ],
+      scholarship: [
+        { label: "No scholarship", evidence: "A2", category: "No scholarship" },
+        { label: "Scholarship", evidence: "A2", category: "Scholarship" },
+      ],
+    };
+    for (const [comparison, groups] of Object.entries(outcomeGroups)) {
+      const rates = groups.map((group) => ({
+        label: group.label,
+        dropout: pulse.evidence[group.evidence].bars.find((bar) => bar.label === group.category).value,
+      }));
+      addChart(() => Charts.columns(
+        $(`#c-stat-${comparison}-outcomes`),
+        rates.map((group) => group.label),
+        [
+          { key: "dropout", label: "Dropout", color: "var(--critical)" },
+          { key: "nonDropout", label: "Non-dropout", color: "var(--series-1)" },
+        ],
+        (label, key) => {
+          const group = rates.find((row) => row.label === label);
+          if (!group) return null;
+          return key === "dropout" ? group.dropout : 1 - group.dropout;
+        },
+        { fmt: (value) => percent(value, 0), tickFmt: (value) => percent(value, 0), max: 1, height: 260 },
+      ));
+    }
+
+    const ages = (X.histograms || []).find((h) => h.label.startsWith("Age"));
+    if (ages) addChart(() => Charts.histogram($("#c-stat-ages"), ages.bins, { fmt: (v) => v.toFixed(0), unit: "students" }));
+
+    statOverview = `<div class="grid g2" style="margin-bottom:16px">
+      ${card("Cohort outcomes & percentages (Dropouts vs Graduates)", "Full cohort of 4,424 students: 32.1% drop out, 49.9% graduate, 17.9% enrolled", chartBox("c-stat-outcomes"))}
+      ${card("Dropout and non-dropout by student group", "Share within each group; comparisons are separated for readability",
+        `<div class="grid g2">
+          <div><h4>Debt status</h4>${chartBox("c-stat-debt-outcomes")}</div>
+          <div><h4>Scholarship status</h4>${chartBox("c-stat-scholarship-outcomes")}</div>
+        </div>`)}
+      ${ages ? card("Outliers: age at enrolment", esc(ages.note || ""), chartBox("c-stat-ages")) : ""}
+    </div>`;
+  }
   const describe = table(X.describe, [
     { label: "Variable", value: (r) => r.variable },
     { label: "n", numeric: true, value: (r) => r.n.toLocaleString() },
@@ -224,7 +376,7 @@ function statisticsPanel(p, pulse, X) {
     { label: "IQR", numeric: true, value: (r) => `${number(r.q1)} – ${number(r.q3)}` },
     { label: "Min – max", numeric: true, value: (r) => `${number(r.min)} – ${number(r.max)}` },
   ]);
-  const ids = Object.keys(pulse.findings);
+  const ids = displayedFindingIds(p, pulse);
   const tests = table(ids, [
     { label: "Finding", html: true, value: (id) => `<b>${id}</b> ${esc(shortName(id, pulse.findings[id]))}` },
     { label: "Test", value: (id) => pulse.evidence[id].test.test },
@@ -233,9 +385,52 @@ function statisticsPanel(p, pulse, X) {
     { label: "p-value", numeric: true, value: (id) => pValue(pulse.evidence[id].test.p) },
     { label: "Decision (5%)", value: (id) => pulse.evidence[id].test.decision },
   ]);
-  return card("Descriptive statistics", "After the default cleaning choices", describe)
+  let bandAnalysis = "";
+  if (p === "academic" && X.debt_by_band && X.debt_by_band.length) {
+    const bands = X.debt_by_band;
+    const bandNames = {
+      "low (<=50%)": "Low ≤50%",
+      mid: "Mid >50–99%",
+      "all passed": "All passed >99%",
+    };
+    const bandTests = (pulse.evidence.A4.tests || []);
+    const strongest = bands.reduce((best, row) => Math.abs(row.gap) > Math.abs(best.gap) ? row : best);
+    const bandTable = table(bands, [
+      { label: "Semester-1 approval band", value: (r) => bandNames[r.band] || r.band },
+      { label: "Debtors' dropout rate", numeric: true, value: (r) => percent(r.debtor_dropout_rate) },
+      { label: "Non-debtors' dropout rate", numeric: true, value: (r) => percent(r.non_debtor_dropout_rate) },
+      { label: "Difference (debtors − non-debtors)", numeric: true, value: (r) => points(r.gap) },
+      { label: "Debtors / non-debtors (n)", numeric: true, value: (r) => `${r.n_debtors.toLocaleString()} / ${r.n_non_debtors.toLocaleString()}` },
+      { label: "Within-band z-test p", numeric: true, value: (r) => pValue((bandTests.find((t) => t.band === r.band) || {}).p) },
+    ]);
+    addChart(() => Charts.columns(
+      $("#c-debt-bands"),
+      bands.map((r) => bandNames[r.band] || r.band),
+      [
+        { key: "debtor_dropout_rate", label: "Debtors", color: "var(--series-2)" },
+        { key: "non_debtor_dropout_rate", label: "Non-debtors", color: "var(--series-1)" },
+      ],
+      (label, key) => {
+        const row = bands.find((r) => (bandNames[r.band] || r.band) === label);
+        return row ? row[key] : null;
+      },
+      { fmt: (v) => percent(v, 0), tickFmt: (v) => percent(v, 0), max: 1, height: 260 },
+    ));
+    bandAnalysis = `<div style="margin-top:16px">${card(
+      "Debt and dropout within semester-1 approval bands",
+      "Approval rate = approved units ÷ enrolled units. The chart compares observed dropout rates for debtors and non-debtors within each band.",
+      `${chartBox("c-debt-bands")}${bandTable}
+       <p class="small band-interpretation"><b>Interpretation:</b> the largest observed debtor/non-debtor gap is in the ${esc(bandNames[strongest.band] || strongest.band)} band
+       (${points(strongest.gap)}; ${strongest.n_debtors.toLocaleString()} debtors and ${strongest.n_non_debtors.toLocaleString()} non-debtors).
+       A4's average gap across the included bands is ${points(pulse.robustness.values.A4.DEFAULT)}. These are associations, not evidence that debt causes dropout;
+       the per-band z-test p-values are unadjusted for multiple comparisons.</p>
+       `,
+    )}</div>`;
+  }
+  return statOverview + card("Descriptive statistics", "After the default cleaning choices", describe)
     + `<div style="margin-top:16px">${card("Hypothesis tests, one per finding",
-        "Simple tests from the course: a z-test to compare two percentages, a t-test to compare two means, a chi-square test for two categories. With thousands of rows almost every test rejects H0, so the size of the difference (Findings) matters more than p.", tests)}</div>`;
+        "Simple tests from the course: a z-test to compare two percentages, a t-test to compare two means, a chi-square test for two categories. With thousands of rows almost every test rejects H0, so the size of the difference (Findings) matters more than p.", tests)}</div>`
+    + bandAnalysis;
 }
 
 /* --- 3. Dimensionality reduction: PCA, t-SNE, variance explained, loadings */
@@ -257,7 +452,12 @@ function reductionPanel(p, pulse, X) {
   if (!D) return `<p class="muted">Not available for this pulse.</p>`;
   const v = D.variance;
   const styles = groupStyles(D.categories);
-  addChart(() => Charts.scatter($("#c-pca"), D.pca, styles, { xLabel: `PC1 (${percent(v[0], 0)})`, yLabel: `PC2 (${percent(v[1], 0)})` }));
+  addChart(() => Charts.scatter($("#c-pca"), D.pca, styles, {
+    xLabel: `PC1 (${percent(v[0], 0)})`,
+    yLabel: `PC2 (${percent(v[1], 0)})`,
+    offsetCategoryToRight: p === "academic" ? "Graduated"
+      : p === "wellbeing" ? "Persistent sadness" : undefined,
+  }));
   const showTsne = D.n_unique >= 200;   // with few distinct rows t-SNE only scatters copies of the same points
   if (showTsne) addChart(() => Charts.scatter($("#c-tsne"), D.tsne, styles, { axes: false, xLabel: "t-SNE 1", yLabel: "t-SNE 2" }));
   addChart(() => {
@@ -271,8 +471,13 @@ function reductionPanel(p, pulse, X) {
     { label: "PC2", numeric: true, value: (r) => number(r.pc2) },
   ]);
   const overlap = D.n_unique < 200 ? ` Only ${D.n_unique} different answer combinations exist, so many students sit on exactly the same point.` : "";
-  return notesCard(X.dr_notes) + `<p class="muted small">${D.n_rows.toLocaleString()} rows × ${D.n_features} standardised features. Colour shows the outcome,
-      which the methods never see, so any separation is structure already in the data.${overlap}</p>
+  const pcaPointNote = D.pca.some((point) => point.n > 1)
+    ? `Markers are grouped at identical PCA coordinates; larger markers represent more students. When outcome groups share a coordinate, their markers are slightly offset horizontally for visibility${p === "wellbeing" ? ", with Persistent sadness shifted to the right" : p === "academic" ? ", with Graduated shifted to the right" : ""} (the PCA values themselves are unchanged).`
+    : "";
+  const pcaDescription = p === "wellbeing" ? "" : `<p class="muted small">${D.n_rows.toLocaleString()} rows × ${D.n_features} standardised features. Colour shows the outcome,
+      which the methods never see, so any separation is structure already in the data.${overlap} ${pcaPointNote}</p>
+    `;
+  return notesCard(X.dr_notes) + pcaDescription + `
     <div class="grid g2">
       ${card("PCA: first two components", `Together they explain ${percent(v[0] + v[1], 0)} of the variance`, chartBox("c-pca"))}
       ${showTsne ? card("t-SNE", `Non-linear map of a ${D.tsne.length}-row sample; only local neighbourhoods are meaningful`, chartBox("c-tsne")) : ""}
@@ -308,22 +513,19 @@ function rulesPanel(p, pulse, X) {
 function clusteringPanel(p, pulse, X) {
   const M = X.cluster_map;
   const C = X.clusters;
-  const methodNames = { kmeans: "K-Means", dbscan: "DBSCAN", optics: "OPTICS" };
-  const metrics = table((M && M.metrics) || (C && C.metrics) || [], [
-    { label: "Method", value: (r) => methodNames[r.method] || r.method },
-    { label: "Groups", numeric: true, value: (r) => r.n_clusters },
-    { label: "Unassigned", numeric: true, value: (r) => percent(r.noise_share, 0) },
-    { label: "Silhouette", numeric: true, value: (r) => number(r.silhouette, 3) },
-  ]);
+  const kmeansMetric = (C && C.metrics || []).find((metric) => metric.method === "kmeans");
+  const kmeansNotes = (X.cluster_notes || []).filter((note) => !/\b(DBSCAN|OPTICS)\b/i.test(note));
   let profiles = "";
   if (C && C.profiles && C.profiles.length) {
-    const keys = Object.keys(C.profiles[0]);
-    profiles = table(C.profiles, keys.map((k) => ({
+    const kmeansProfiles = C.profiles.filter((r) => typeof r.cluster === "number" || typeof r.group === "number");
+    const profileRows = kmeansProfiles.length ? kmeansProfiles : C.profiles;
+    const keys = Object.keys(profileRows[0] || {});
+    profiles = table(profileRows, keys.map((k) => ({
       label: k.replace(/_/g, " "),
       numeric: !/cluster|group/.test(k),
       value: (r) => {
         const v = r[k];
-        if (/cluster|group/.test(k)) return typeof v === "number" ? "Group " + (v + 1) : v;   // e.g. "DBSCAN noise"
+        if (/cluster|group/.test(k)) return typeof v === "number" ? "Group " + (v + 1) : v;
         if (typeof v !== "number") return v ?? "–";
         if (/rate|share/.test(k)) return percent(v);
         return Number.isInteger(v) ? v.toLocaleString() : number(v, 2);
@@ -331,11 +533,11 @@ function clusteringPanel(p, pulse, X) {
     })));
   }
   if (M) addChart(() => Charts.scatter($("#c-clu"), M.points, groupStyles(M.groups), { xLabel: "PC1", yLabel: "PC2" }));
-  return notesCard(X.cluster_notes) + `<div class="grid g2">
-      ${M ? card("K-Means groups on the first two principal components", `Sample of ${M.points.length.toLocaleString()}; DBSCAN left ${percent(M.noise_share, 0)} outside every group`, chartBox("c-clu")) : ""}
-      ${card("Three methods compared", "Silhouette runs from −1 to 1: above 0.5 = clearly separated groups, 0.25–0.5 = real but overlapping, below 0.25 = weak", metrics)}
-    </div>
-    ${profiles ? `<div style="margin-top:16px">${card("What each group looks like", "", profiles)}</div>` : ""}`;
+  return notesCard(kmeansNotes)
+    + (M ? card("K-Means groups on the first two principal components",
+      `${p === "wellbeing" && M.n_rows ? `All ${M.n_rows.toLocaleString()} students; identical positions are grouped into markers` : `Sample of ${M.points.length.toLocaleString()}`}${p === "wellbeing" && kmeansMetric ? ` · Silhouette score: ${number(kmeansMetric.silhouette, 3)} (estimated from ${kmeansMetric.silhouette_sample_size.toLocaleString()} students; −1 to 1, higher indicates clearer separation)` : ""}`,
+      chartBox("c-clu")) : "")
+    + (profiles ? `<div style="margin-top:16px">${card("What each group looks like", "", profiles)}</div>` : "");
 }
 
 /* --- 6. Findings: one graph + one simple test per finding, then the cleaning-choice selector */
@@ -347,7 +549,7 @@ function findingChart(id, ev) {
   const bars = ev.bars.map((b, i) => ({
     label: b.label, value: b.value,
     color: twoGroups ? (i === 0 ? "var(--series-2)" : "var(--series-1)") : "var(--series-1)",
-    tip: `<b>${esc(b.label)}</b><br>${fmt(b.value)}<br>${b.n.toLocaleString()} ${id.startsWith("EN") && ev.kind !== "gap" ? "hours" : id === "EN3" ? "vacation hours" : "students"}`,
+    tip: `<b>${esc(b.label)}</b><br>${fmt(b.value)}<br>${b.n.toLocaleString()} ${id.startsWith("EN") ? "hours" : "students"}`,
   }));
   addChart(() => Charts.hbars($(`#c-f-${id}`), bars, { fmt, min: ev.kind === "gap" ? undefined : 0, labelWidth: 150 }));
 }
@@ -355,7 +557,7 @@ function findingChart(id, ev) {
 function findingsPanel(p, pulse, X) {
   const R = pulse.robustness;
   let cards = "";
-  for (const id of Object.keys(pulse.findings)) {
+  for (const id of displayedFindingIds(p, pulse)) {
     const ev = pulse.evidence[id];
     findingChart(id, ev);
     cards += card(`${id} · ${esc(shortName(id, pulse.findings[id]))}: ${formatFinding(id, R.values[id].DEFAULT)}`,
@@ -370,7 +572,8 @@ function findingsPanel(p, pulse, X) {
   const explorer = card("Does each finding survive a different cleaning choice?",
     "Each finding is recomputed with one decision changed (the others stay at our default).",
     `<div class="controls" id="explorer">${selects}</div><div id="explorer-table"></div>`);
-  return `<div class="grid g2">${cards}</div>` + extraAnswer(p, X) + `<div style="margin-top:16px">${explorer}</div>`;
+  const answer = p === "academic" ? "" : extraAnswer(p, X);
+  return `<div class="grid g2">${cards}</div>` + answer + `<div style="margin-top:16px">${explorer}</div>`;
 }
 
 // The chart that answers the research question as a whole (beyond the individual findings).
@@ -386,27 +589,16 @@ function extraAnswer(p, X) {
     addChart(() => Charts.hbars($("#c-answer"), X.sleep_gradient.map((r) => ({ label: (r.sleep_hours === 4 ? "≤4" : r.sleep_hours === 10 ? "10+" : r.sleep_hours) + " h", value: r.rate })),
       { fmt: (v) => percent(v, 0), min: 0, labelWidth: 50 }));
     return `<div style="margin-top:16px">${card("Persistent sadness by hours of sleep",
-      "Weighted share of students (CDC YRBS 2023): lowest at 8 hours, higher with less and with much more sleep", chartBox("c-answer"))}</div>`;
-  }
-  if (p === "energy") {
-    addChart(() => Charts.lines($("#c-answer"), [
-      { label: "Teaching days", color: "var(--series-2)", points: X.load_curve.map((r) => ({ x: r.hour, y: r.teaching })) },
-      { label: "Low-activity days", color: "var(--series-1)", points: X.load_curve.map((r) => ({ x: r.hour, y: r.low })) },
-    ], { fmt: (v) => v.toFixed(0), unit: " kW", xTicks: [0, 3, 6, 9, 12, 15, 18, 21, 23], xFmt: (h) => `${h}:00` }));
-    return `<div style="margin-top:16px">${card("A day in the academic building",
-      "Mean power at each hour (kW). Teaching days rise from about 8:00 and stay high until evening; nights are almost the same on both", chartBox("c-answer"))}</div>
-      <div class="callout" style="margin-top:16px">The institute calendar marks teaching days and low-activity days (weekends,
-      holidays, vacations). It does <b>not</b> mark exams, so this pulse makes no claim about exams. Delhi's long vacation falls in the
-      hottest months, which is why EN3 compares term and vacation inside the same month.</div>`;
+      "Weighted share of students: lowest at 8 hours, higher with less and with much more sleep", chartBox("c-answer"))}</div>`;
   }
   return "";
 }
 
-function connectExplorer(pulse) {
+function connectExplorer(p, pulse) {
   const R = pulse.robustness;
   const selects = Array.from(document.querySelectorAll("#explorer select"));
   function show(variant) {
-    const rows = Object.keys(pulse.findings);
+    const rows = displayedFindingIds(p, pulse);
     $("#explorer-table").innerHTML = table(rows, [
       { label: "Finding", html: true, value: (id) => `<b>${id} · ${esc(shortName(id, pulse.findings[id]))}</b>` },
       { label: "Our default", numeric: true, value: (id) => formatFinding(id, R.values[id].DEFAULT) },
@@ -435,6 +627,8 @@ function robustnessPage() {
     if (!pulse.available) continue;
     const R = pulse.robustness;
     const variants = R.variants.filter((v) => v !== "DEFAULT");
+    const ids = displayedFindingIds(p, pulse);
+    const counts = displayedRobustnessCounts(pulse, ids);
     const columns = [
       { label: "Finding", html: true, value: (id) => `<b>${id}</b> ${esc(shortName(id, pulse.findings[id]))}` },
       { label: "Default", numeric: true, value: (id) => formatFinding(id, R.values[id].DEFAULT) },
@@ -443,8 +637,8 @@ function robustnessPage() {
       columns.push({ label: niceVariant(v), html: true, value: (id) => `${chip(R.status[id][v])}<div class="small muted">${formatFinding(id, R.values[id][v])}</div>` });
     }
     html += `<details class="card" style="margin-bottom:12px" ${p === "academic" ? "open" : ""}>
-      <summary><b>${pulse.meta.num} ${pulse.meta.title}</b> · ${R.summary.holds}/${R.summary.tested} hold</summary>
-      ${table(Object.keys(pulse.findings), columns)}</details>`;
+      <summary><b>${pulse.meta.num} ${pulse.meta.title}</b> · ${counts.holds}/${counts.tested} hold</summary>
+      ${table(ids, columns)}</details>`;
   }
   $("#app").innerHTML = html;
 }
@@ -454,16 +648,33 @@ function robustnessPage() {
 function conclusionsPage() {
   const A = DATA.pulses.academic, W = DATA.pulses.wellbeing, E = DATA.pulses.energy;
   const v = (pulse, id) => pulse.robustness.values[id].DEFAULT;
-  const tl = A.extras.timeline.find((r) => r.stage.includes("semester 1"));
   const a3 = A.robustness.values.A3["zero_grade=as_score"] / v(A, "A3");
   const bandLow = (A.evidence.A4.tests || [])[0];
+  const academicRules = table([
+    { when: "Week 1", rule: "Fees not paid or in debt", flagged: "18.5%", caught: "39%", precision: "82%" },
+    { when: "End of semester 1", rule: "Passed half or fewer of semester-1 courses", flagged: "22.3%", caught: "56%", precision: "98%" },
+    { when: "End of semester 1", rule: "Passed half or fewer of semester-1 courses or fees not paid", flagged: "27.8%", caught: "68%", precision: "95%" },
+    { when: "End of semester 2", rule: "Passed half or fewer of semester-2 courses", flagged: "26.8%", caught: "66%", precision: "97%" },
+  ], [
+    { label: "When", value: (r) => r.when },
+    { label: "Rule", value: (r) => r.rule },
+    { label: "Students flagged", numeric: true, value: (r) => r.flagged },
+    { label: "Future dropouts caught", numeric: true, value: (r) => r.caught },
+    { label: "Flagged students who dropped out", numeric: true, value: (r) => r.precision },
+  ]);
   let holds = 0, tested = 0;
-  for (const p of PULSES) { holds += DATA.pulses[p].robustness.summary.holds; tested += DATA.pulses[p].robustness.summary.tested; }
+  for (const p of PULSES) {
+    const pulse = DATA.pulses[p];
+    const counts = displayedRobustnessCounts(pulse, displayedFindingIds(p, pulse));
+    holds += counts.holds;
+    tested += counts.tested;
+  }
   $("#app").innerHTML = `<h1>Conclusions</h1>
     <h2>① Academic: who drops out, and how early can we tell?</h2>
+    <p class="small muted">Simple rule-based contact lists, among 3,630 students with resolved outcomes (1,421 dropouts). These are observed rates, not regression predictions.</p>
+    ${academicRules}
+    <p class="small">At the end of semester 1, the combined course-progress and fee rule flags 27.8% of students and catches 68% of future dropouts; 95% of those flagged later drop out. Waiting until semester 2 does not improve the rule's yield (66% caught). Without a scholarship is a much broader flag: it catches 91% of dropouts but includes 73% of all students, so it is less practical as a contact list.</p>
     <ul class="notes">
-      <li>After semester 1, contacting the 25% highest-risk students reaches ${percent(tl.capture_at_25pct, 0)} of all future dropouts
-        (the most such a list can reach is ${percent(tl.max_possible_capture, 0)}). Semester 1 is the moment to act.</li>
       <li>Debtors drop out ${formatFinding("A1", v(A, "A1"))} more often, and students without a scholarship ${formatFinding("A2", v(A, "A2"))} more often.</li>
       <li>Debt still matters among students with similar semester-1 results, except those already failing${bandLow ? ` (p = ${pValue(bandLow.p)} there)` : ""}.</li>
       <li>A grade of 0 is a missing exam, not a score: treating it as a score would make the grade gap ${number(a3, 1)}× too big.</li>
@@ -477,8 +688,6 @@ function conclusionsPage() {
     <h2>③ Energy: when does a campus building behave differently, and why?</h2>
     <ul class="notes">
       <li>The academic building uses ${formatFinding("EN1", v(E, "EN1"))} more on teaching days; the hostels use ${formatFinding("EN2", v(E, "EN2"))} more at night in term.</li>
-      <li>Compared within the same month (season removed) the term effect is ${formatFinding("EN3", v(E, "EN3"))}, but with few comparable months
-        the test is not significant (p = ${pValue(E.evidence.EN3.test.p)}).</li>
     </ul>
     <h2>The umbrella question</h2>
     <ul class="notes">
@@ -490,7 +699,6 @@ function conclusionsPage() {
     <ul class="notes">
       <li>Three institutions in three countries, none of them ours: we compare conclusions, never join rows.</li>
       <li>All findings are associations, not causes.</li>
-      <li>YRBS is a high-school survey, not university students.</li>
       <li>The energy calendar has no exam dates, so we compare teaching days and vacations instead.</li>
       <li>Decisions are changed one at a time; combinations are not tested.</li>
     </ul>`;

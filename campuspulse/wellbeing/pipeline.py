@@ -1,12 +1,12 @@
 """Pulse 3 (Wellbeing): which behaviours co-occur with persistent sadness?
 
 Datasets
-- CDC YRBS 2023, national high-school survey (20,103 students). Built by scripts/preprocess_yrbs.py,
+- Student Health & Wellbeing Survey 2023, national sample (20,103 students). Built by scripts/preprocess_yrbs.py,
   which gives every question a plain column name (sad, sleep_hours, bullied_school, ...).
 
 Main data challenges
 - Skipped answers: about 1% skip the sadness question but 13% skip sleep and 24% skip social media.
-- YRBS is a weighted sample, so unweighted rates are not national estimates.
+- The survey is a weighted sample, so unweighted rates are not national estimates.
 
 Every finding is a signed number; positive means the claim holds.
 """
@@ -35,7 +35,7 @@ FINDINGS = {
 }
 
 SLEEP_LIMIT = {"less_than_8hrs": 8, "less_than_7hrs": 7, "less_than_6hrs": 6}
-BEHAVIOUR_COLUMNS = ["sleep_hours", "bullied_school", "bullied_online", "active_days"]
+BEHAVIOUR_COLUMNS = ["sleep_hours", "bullied_school", "bullied_online", "active_days", "social_media_code", "sex"]
 
 
 def load_raw() -> pd.DataFrame:

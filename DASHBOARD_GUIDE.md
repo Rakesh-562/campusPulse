@@ -29,7 +29,7 @@ Each research-question page has six numbered tabs, in the order we present them.
 | 2. Statistics | Descriptive statistics and one simple hypothesis test per finding |
 | 3. Dimensionality reduction | PCA and t-SNE maps coloured by outcome, variance explained, loadings |
 | 4. Association rules | Two Apriori rules per pulse that sound like common sense but have lift below 1 |
-| 5. Clustering | K-Means groups on a PCA map, four methods compared, group profiles |
+| 5. Clustering | K-Means groups on a PCA map and group profiles |
 | 6. Findings | Every finding with its own graph and test, the chart that answers the question, and the cleaning-choice selector |
 
 The address bar remembers the view: `index.html#/energy/findings` opens the Energy page on Findings.
@@ -45,7 +45,6 @@ Put these links in your slides to jump straight to a view.
 |---|---|---|
 | Two percentages (e.g. dropout rate of debtors vs non-debtors) | Two-proportion z-test | A1, A2, A4, W1, W2, W3 |
 | Two means (e.g. mean grade, mean power) | Two-sample t-test (Welch) | A3, EN1, EN2 |
-| One set of differences against 0 (monthly differences) | One-sample t-test | EN3 |
 
 Each test is written as H0, the statistic, p and the decision at 5%. With thousands of rows almost every test
 rejects H0, so the **size** of the difference (shown on each finding's graph) matters more than p.
@@ -73,18 +72,20 @@ compared (e.g. debtors and non-debtors); red marks a result that fails.
 
 ## 3. ① Academic: Who drops out, and how early can we tell?
 
-**Answer:** after semester 1, contacting the 25% highest-risk students reaches **62.6%** of all future dropouts,
-close to the 63.9% maximum such a list can hold. Debt and missing scholarships are strong, cheap warning signs.
+**Answer:** simple rules on resolved student records can support early, selective outreach without regression.
+At enrolment, a fee/debt check flags **18.5%** of students and catches **39%** of future dropouts. By the end of
+semester 1, a course-progress rule combined with unpaid fees flags **27.8%** and catches **68%**; **95%** of
+those flagged students later drop out. A semester-2 course rule catches 66%, so waiting adds no benefit.
 *Data: UCI 697, 4,424 students at a Portuguese polytechnic; 3,630 with a known outcome.*
 
 | Tab | What to look at | What it tells you |
 |---|---|---|
-| 1. Data processing | Hidden-zero tiles, A3 chart, grade histogram | 538 students were enrolled but graded 0; 91.6% of them dropped out against 23.9% of others, so a 0 is a missing exam, not a score. The histogram shows the 0 spike apart from real grades (which start near 10). Treating 0 as a score inflates the grade gap 5.5×. **Age chart (outliers):** the IQR rule flags 389 students older than 34; they are real mature students, so they are kept (61% of them drop out vs 37%) |
-| 2. Statistics | Descriptive table, test table | Four tests, one per finding; all reject H0 |
+| 1. Data processing | Challenge tiles (hidden zeros, uncredited units), raw semester-1 grade histogram, cleaning log | 538 students were enrolled but graded 0; 91.6% of them dropped out against 23.9% of others, so a 0 is a missing exam, not a score. The raw-grade histogram shows the spike at 0. Treating 0 as a score inflates the grade gap 5.5×. Auditable cleaning log records before/after counts for every cleaning decision. |
+| 2. Statistics | Cohort outcome breakdown, dropout vs non-dropout by debt and scholarship status, age histogram, descriptive table, test table, debt within approval bands chart | Visual overview of the full cohort (32.1% dropout, 49.9% graduate, 17.9% enrolled), outcome shares among resolved students by debt and scholarship status, age distribution, descriptive statistics for key features, tests, and debt vs dropout across approval bands |
 | 3. Dimensionality reduction | PCA and t-SNE | Dropouts and graduates separate on their own; PC1 is course progress |
 | 4. Association rules | Two common beliefs the data contradicts | Living away from home → dropout: lift 0.85 (33% vs 39% overall). International student → dropout: lift 0.91 |
 | 5. Clustering | Group profiles | One group of 232 students drops out at 90.5%; the largest group (709) at 23.6% |
-| 6. Findings | Four finding graphs + the answer chart | See below |
+| 6. Findings | Four finding graphs and cleaning-choice selector | See below |
 
 | Finding | Graph shows | Simple test |
 |---|---|---|
@@ -103,55 +104,52 @@ close to the 63.9% maximum such a list can hold. Debt and missing scholarships a
 
 ## 4. ② Wellbeing: Which behaviours co-occur with persistent sadness?
 
-**Answer:** bullying has the strongest link (+34.3 pp), then short sleep (+18.1 pp), then inactivity (+10.6 pp).
-All three hold under every cleaning choice. *Data: CDC YRBS 2023, US national high-school survey, 20,103 students
-(16,900 who answered every behaviour question), weighted.*
+**Answer:** bullying has the strongest link (+34.1 pp), then short sleep (+18.9 pp), then inactivity (+11.5 pp).
+All three hold under every cleaning choice. *Data: Student Wellbeing Survey 2023, national sample, 20,103 respondents;
+13,322 complete cases after requiring answers to the outcome and all indicator inputs. Rates are survey-weighted.*
 
 | Tab | What to look at | What it tells you |
 |---|---|---|
-| 2. Statistics | Descriptive table, test table | Three tests, one per finding; all reject H0 |
-| 3. Dimensionality reduction | PCA (t-SNE not shown) | Variance is spread evenly, so PCA cannot compress the five behaviours; with only 32 answer combinations t-SNE cannot be interpreted, so it is not shown |
+| 1. Data processing | Missing-answer chart and derived-indicator guide | Shows which responses are recoded into sadness, sleep, bullying, inactivity, heavy social-media and sex indicators |
+| 2. Statistics | Weighted sleep and activity distributions, indicator prevalence, descriptive table and test table | Understands the retained sample and the five weighted indicator rates; all three finding tests reject H0 |
+| 3. Dimensionality reduction | PCA (t-SNE not shown) | Variance is spread evenly, so PCA cannot compress the five yes/no features; with only 32 answer combinations t-SNE cannot be interpreted, so it is not shown. Overlapping sadness-outcome markers at the same PCA coordinate are offset horizontally for visibility |
 | 4. Association rules | Two common beliefs the data contradicts | Heavy social media + 8 h sleep → sadness: lift 0.72 (29% vs 41%). Never exercises + male → sadness: lift 0.81 |
-| 5. Clustering | Group profiles | Sleep-deprived but active group: 58% sadness; rested and active group: 26% |
-| 6. Findings | Four finding graphs + sadness by hours of sleep | See below |
+| 5. Clustering | K-Means groups on a PCA map and group profiles | Groups are combinations of yes/no answers; compare their sadness rates rather than treating them as hidden student types |
+| 6. Findings | Three finding graphs + sadness by hours of sleep | See below |
 
 | Finding | Graph shows | Simple test |
 |---|---|---|
-| W1 Sleep-deprived (< 8 h) report more sadness: **+18.1 pp** | 44.5% vs 26.4% | Two-proportion z = 20.50, p < 0.0001 → reject H0 |
-| W2 Bullied students report more sadness: **+34.3 pp** | 66.1% vs 31.8% | z = 38.54, p < 0.0001 → reject H0 |
-| W3 Inactive students report more sadness: **+10.6 pp** | 49.3% vs 38.7% | z = 9.01, p < 0.0001 → reject H0 |
+| W1 Sleep-deprived (< 8 h) report more sadness: **+18.9 pp** | 44.9% vs 26.0% | Two-proportion z = 18.64, p < 0.0001 → reject H0 |
+| W2 Bullied students report more sadness: **+34.1 pp** | 65.9% vs 31.9% | z = 34.54, p < 0.0001 → reject H0 |
+| W3 Inactive students report more sadness: **+11.5 pp** | 50.3% vs 38.8% | z = 8.02, p < 0.0001 → reject H0 |
 
-The sleep chart: sadness falls from 60% at ≤4 hours to 26% at 8 hours, then rises again to 34% at 10+ hours.
+The sleep chart: sadness falls from 60.5% at ≤4 hours to 25.4% at 8 hours, then rises again to 32.5% at 10+ hours.
 
 **Try live:** set *survey weights* to *unweighted* or *sleep cutoff* to *less than 6 hrs*: W1 to W3 still hold.
 
-**Caveats:** a high-school survey, not university students; association, not cause. Rates are weighted; the z-tests
-use the sample counts.
+**Caveats:** association, not cause; self-reported survey responses. Complete-case filtering leaves
+13,322 of 20,103 respondents. Rates are weighted; the z-tests use sample counts and are not survey-design-adjusted.
 
 ---
 
 ## 5. ③ Energy: When does a campus building behave differently, and why?
 
 **Answer:** the academic building draws **17.9 kW more** on teaching days, and the hostels **12.2 kW more at night**
-in term than in vacation. Within the same month the term effect is still +10.4 kW, but with only 7 such months the
-test is not significant (p = 0.06). *Data: I-BLEND, IIIT Delhi, 38,520 hours (Aug 2013 – Dec 2017), institute calendar.*
+in term than in vacation. *Data: I-BLEND, IIIT Delhi, 38,520 hours (Aug 2013 – Dec 2017), institute calendar.*
 
 | Tab | What to look at | What it tells you |
 |---|---|---|
 | 1. Data processing | Meter-gap chart | The hostel meters sent no reading in about 25% of hours; by default those hours are dropped |
-| 2. Statistics | Descriptive table, test table | Three tests, one per finding; EN3 does not reject H0 |
+| 2. Statistics | Descriptive table, two-test table, **daily academic-building load curve** | The curve shows hourly mean power on teaching vs low-activity days |
 | 3. Dimensionality reduction | PCA of daily load shapes | PC1 explains 57%: mostly the early-morning hours |
 | 4. Association rules | Two common beliefs the data contradicts | Weekend → hostels busy: lift 0.83 (28% vs 33%). June, the hottest month → campus busy: lift 0.88 (summer vacation) |
 | 5. Clustering | Day groups | 426 mostly weekend / vacation days (~24 kW at noon), 408 teaching days (~51 kW), 77 high-load teaching days (~57 kW) |
-| 6. Findings | Three finding graphs + **daily load curve** + calendar note | The curve: teaching days climb from about 7:00 to a noon peak near 50 kW; nights look the same on both day types |
+| 6. Findings | Two finding graphs + calendar note | The calendar distinguishes teaching from low-activity days, but does not identify exam dates |
 
 | Finding | Graph shows | Simple test |
 |---|---|---|
 | EN1 Academic building uses more on teaching days: **+17.9 kW** | 45.5 kW vs 27.7 kW (9:00–18:00) | Welch t = 63.21, p < 0.0001 → reject H0 |
 | EN2 Hostels use more at night in term: **+12.2 kW** | 54.5 kW vs 42.3 kW (00:00–05:00) | Welch t = 31.63, p < 0.0001 → reject H0 |
-| EN3 Same comparison within the same month: **+10.4 kW** | Term minus vacation in each of the 7 months that have both (−5.8 to +20.4 kW) | One-sample t = 2.30, p = 0.061 → **do not** reject H0 |
-
-**Say:** the term effect is not just the season, but with only 7 comparable months we cannot prove it.
 
 **Caveats:** the calendar has no exam dates, so we make no exam claims; hostel power is not a measurement of sleep.
 
@@ -165,7 +163,7 @@ Open **Robustness**: each pulse is a card, rows = findings, columns = alternativ
 |---|---|---|
 | ① Academic | 15 of 16 | A3 inflates 5.5× if ungraded zeros are treated as scores |
 | ② Wellbeing | 15 of 15 | Nothing moves |
-| ③ Energy | 14 of 15 | EN3 weakens if meter gaps are filled by repeating the last reading |
+| ③ Energy | 10 of 10 | Both displayed findings hold under every cleaning choice |
 
 **The message:** most findings are solid, but a reasonable-looking choice (treating a missing exam as a 0, skipping
 text cleaning) can create most of an effect, so cleaning decisions must be reported next to the numbers.
@@ -191,7 +189,6 @@ text cleaning) can create most of an effect, so cleaning decisions must be repor
 | Which test did you use, and why? | z-test for two percentages, t-test for two means, chi-square for two categories: the simplest test for each comparison |
 | Everything has p < 0.0001: does that mean the effects are big? | No: with thousands of rows tiny differences are significant, so we show the size of each difference on its graph |
 | Is debt a cause of dropout? | Not proven: an association. A4 shows it matters even among students with similar grades, except those already failing |
-| Why compare within the same month for energy? | Vacation is also the hottest season, so a raw term-vs-vacation gap could be air-conditioning |
 | Why no exam analysis? | The I-BLEND calendar has no exam dates |
 | What is pp? | Percentage points: the difference between two percentages, e.g. 75.5% − 34.5% = 41.1 pp |
 | What is lift? | How many times the overall rate the "then" happens when the "if" is true; above 1 = more often, below 1 = less often. Our rules tab shows beliefs with lift below 1 |

@@ -30,8 +30,8 @@ META = {
                      source="Polytechnic Institute of Portalegre, Portugal · 4,424 students · 2008–2019 cohorts",
                      licence="CC BY 4.0", challenge="Grades of 0 that are really missing; unresolved 'Enrolled' outcomes"),
     "wellbeing": dict(num="②", title="Wellbeing", question="Which behaviours co-occur with persistent sadness?",
-                      dataset="CDC YRBS 2023",
-                      source="US Youth Risk Behavior Survey 2023, national high-school sample",
+                      dataset="Student Wellbeing Survey 2023",
+                      source="National Student Health & Behavioral Sample · 20,103 respondents",
                       licence="Public domain / open", challenge="Skipped answers on some questions; survey weights"),
     "energy": dict(num="③", title="Energy", question="When does a campus building behave differently, and why?",
                    dataset="I-BLEND · campus building electricity",
@@ -94,6 +94,27 @@ def describe(df: pd.DataFrame, cols: dict) -> list:
     return rows
 
 
+def weighted_distribution(df: pd.DataFrame, column: str, labels: dict | None = None) -> list:
+    """Weighted category shares and unweighted row counts for the valid values of a column."""
+    valid = df.loc[df[column].notna()]
+    total_weight = valid["w"].sum()
+    if not len(valid) or total_weight <= 0:
+        return []
+    rows = []
+    for value, group in valid.groupby(column, sort=True):
+        display = labels.get(value, str(value)) if labels else str(value)
+        rows.append(dict(label=display, share=float(group["w"].sum() / total_weight), n=int(len(group))))
+    return rows
+
+
+def weighted_rate(df: pd.DataFrame, column: str, label: str) -> dict:
+    """Weighted prevalence and unweighted valid response count for a binary indicator."""
+    valid = df.loc[df[column].notna()]
+    total_weight = valid["w"].sum()
+    share = float(valid.loc[valid[column] == 1, "w"].sum() / total_weight) if total_weight > 0 else float("nan")
+    return dict(label=label, share=share, n=int(len(valid)))
+
+
 def histogram(values, bins, label, note=""):
     v = pd.to_numeric(pd.Series(values), errors="coerce").dropna()
     counts, edges = np.histogram(v, bins=bins)
@@ -101,15 +122,23 @@ def histogram(values, bins, label, note=""):
                                               for i in range(len(counts))])
 
 
-def scatter(points2d, categories, n=700, seed=0):
-    """Random subsample of 2-D points with a category per point (for PCA / t-SNE / cluster maps)."""
+def scatter(points2d, categories, n=700, seed=0, aggregate=False):
+    """Prepare 2-D points for plotting, optionally aggregating identical coordinates by category."""
     pts = np.asarray(points2d)[:, :2]
     cats = np.asarray(categories)
+    if aggregate:
+        counts = {}
+        for point, category in zip(pts, cats):
+            key = (float(point[0]), float(point[1]), str(category))
+            counts[key] = counts.get(key, 0) + 1
+        return [dict(x=x, y=y, c=category, n=count)
+                for (x, y, category), count in counts.items()]
     idx = np.random.default_rng(seed).permutation(len(pts))[:n]
     return [dict(x=float(pts[i, 0]), y=float(pts[i, 1]), c=str(cats[i])) for i in idx]
 
 
-def dr_block(X: pd.DataFrame, labels, label_names: dict, tsne_n=500, n_comp=6, sample=None):
+def dr_block(X: pd.DataFrame, labels, label_names: dict, tsne_n=500, n_comp=6, sample=None,
+             aggregate_pca=False):
     """PCA scree + PCA scatter + t-SNE scatter (L12-14), all on the standardised matrix X."""
     from campuspulse.common import reduce, clustering
     X = X.astype(float)
@@ -120,7 +149,7 @@ def dr_block(X: pd.DataFrame, labels, label_names: dict, tsne_n=500, n_comp=6, s
     top = loadings.assign(w=loadings.abs().max(axis=1)).sort_values("w", ascending=False).head(6)
     out = dict(variance=[float(v) for v in var], n_features=int(X.shape[1]), n_rows=int(X.shape[0]),
                n_unique=int(X.drop_duplicates().shape[0]),
-               pca=scatter(pts, labels.values), categories=list(label_names.values()),
+               pca=scatter(pts, labels.values, n=len(pts), aggregate=aggregate_pca), categories=list(label_names.values()),
                top_loadings=[dict(feature=i, pc1=r.pc1, pc2=r.pc2) for i, r in top.iterrows()])
     sub = clustering.sample_rows(X, tsne_n)
     out["tsne"] = scatter(reduce.tsne(sub, perplexity=min(30, max(5, len(sub) // 4))), labels.loc[sub.index].values, n=tsne_n)
@@ -139,6 +168,22 @@ def cluster_map(X: pd.DataFrame, k: int, sample_n: int, profile_df: pd.DataFrame
     agree = adjusted_rand_score(labels["kmeans"][~noise], labels["dbscan"][~noise]) if (~noise).sum() > 1 else float("nan")
     return dict(points=scatter(pts, names, n=sample_n), groups=sorted(set(names)),
                 noise_share=float(noise.mean()), metrics=metrics, dbscan_kmeans_agreement=float(agree))
+
+
+def wellbeing_cluster_result(P, df):
+    """Fit K-Means to every eligible wellbeing row and aggregate identical plot positions."""
+    from campuspulse.common import clustering, reduce
+    X = P.get_behavior_matrix(df)
+    metrics, labels = clustering.run_kmeans(X.values)
+    profiles = df.assign(group=labels).groupby("group").agg(
+        size=("sadness", "count"), sadness_rate=("sadness", "mean"), sleep_deprived_rate=("sleep_deprived", "mean"),
+        bullied_rate=("bullied", "mean"), inactive_rate=("inactive", "mean"),
+        heavy_social_media_rate=("heavy_social_media", "mean"), female_share=("female", "mean")).round(3)
+    pts, _, _ = reduce.pca(X, n=2)
+    names = [f"Group {int(label) + 1}" for label in labels]
+    plot = dict(points=scatter(pts, names, n=len(pts), aggregate=True),
+                groups=sorted(set(names)), n_rows=len(X))
+    return dict(metrics=metrics, profiles=profiles.reset_index()), plot
 
 
 def safe(label, fn):
@@ -163,8 +208,63 @@ def extras_academic(P):
     metrics, profiles = P.run_clustering(df)
     rules = P.run_rules(df).head(8)
     dec = P.run_decomposition(df)
+
+    # 1. Outcomes breakdown (full cohort & resolved)
+    total_raw = len(raw)
+    outcomes = [
+        dict(label=k, n=int(v), share=round(float(v / total_raw), 4),
+             pct=round(float(v / total_raw * 100), 1))
+        for k, v in outcome.items()
+    ]
+    resolved_counts = raw[raw["Target"] != "Enrolled"]["Target"].value_counts()
+    total_res = int(resolved_counts.sum())
+    resolved_outcomes = [
+        dict(label=k, n=int(v), share=round(float(v / total_res), 4),
+             pct=round(float(v / total_res * 100), 1))
+        for k, v in resolved_counts.items()
+    ]
+
+    # 2. Score brackets and dropout rates (how dropouts vary by semester-1 evaluated score)
+    bins = [9.5, 11.5, 12.5, 13.5, 14.5, 20.0]
+    labels = ['10.0–11.5 (Low Pass)', '11.5–12.5 (Average)', '12.5–13.5 (Good)', '13.5–14.5 (High)', '14.5+ (Very High)']
+    g = df[[P.GRADE, 'dropout']].copy()
+    g['band'] = pd.cut(g[P.GRADE], bins=bins, labels=labels)
+
+    score_dropout = []
+    miss = g[g[P.GRADE].isna()]
+    n_miss = len(miss)
+    d_miss = int((miss['dropout'] == 1).sum())
+    score_dropout.append({
+        'label': '0.0 (Missing / Ungraded)',
+        'n': n_miss,
+        'dropouts': d_miss,
+        'rate': round(float(d_miss / n_miss), 4),
+        'graduates': n_miss - d_miss
+    })
+
+    for b, grp in g.groupby('band', observed=True):
+        n_b = len(grp)
+        d_b = int((grp['dropout'] == 1).sum())
+        score_dropout.append({
+            'label': str(b),
+            'n': n_b,
+            'dropouts': d_b,
+            'rate': round(float(d_b / n_b), 4),
+            'graduates': n_b - d_b
+        })
+
+    mean_scores = dict(
+        persister_grade=round(float(df.loc[df['dropout'] == 0, P.GRADE].dropna().mean()), 2),
+        dropout_grade=round(float(df.loc[df['dropout'] == 1, P.GRADE].dropna().mean()), 2),
+        persister_admission=round(float(df.loc[df['dropout'] == 0, 'Admission grade'].dropna().mean()), 1),
+        dropout_admission=round(float(df.loc[df['dropout'] == 1, 'Admission grade'].dropna().mean()), 1)
+    )
+
     return dict(
-        outcomes=[dict(label=k, n=int(v)) for k, v in outcome.items()],
+        outcomes=outcomes,
+        resolved_outcomes=resolved_outcomes,
+        score_dropout=score_dropout,
+        mean_scores=mean_scores,
         hidden_zeros=dict(n=int(zero.sum()), n_after_enrolled=int((zero & (raw["Target"] != "Enrolled")).sum()), dropout_rate=float((raw.loc[zero, "Target"] == "Dropout").mean()),
                           dropout_rate_others=float((raw.loc[~zero, "Target"] == "Dropout").mean()),
                           no_units=int((raw[P.ENROLLED1] == 0).sum()),
@@ -194,24 +294,37 @@ def extras_wellbeing(P):
     D = defaults(P.DECISIONS)
     yr = P.clean(D)
     st = P.run_stats(yr)
+    clusters, full_cluster_map = wellbeing_cluster_result(P, yr)
     gradient = yr.groupby("sleep_hours").apply(lambda g: np.average(g["sadness"], weights=g["w"])).rename("rate").reset_index()
+    sleep_labels = {4: "≤4 hours", 5: "5 hours", 6: "6 hours", 7: "7 hours", 8: "8 hours", 9: "9 hours", 10: "10+ hours"}
+    activity_labels = {day: f"{day} days" for day in range(8)}
     return dict(sleep_gradient=gradient,
+                sleep_distribution=weighted_distribution(yr, "sleep_hours", sleep_labels),
+                activity_distribution=weighted_distribution(yr, "active_days", activity_labels),
+                indicator_prevalence=[
+                    weighted_rate(yr, "sadness", "Persistent sadness"),
+                    weighted_rate(yr, "sleep_deprived", "Sleep-deprived (<8 h)"),
+                    weighted_rate(yr, "bullied", "Bullied (school or online)"),
+                    weighted_rate(yr, "inactive", "Inactive (0 active days)"),
+                    weighted_rate(yr, "heavy_social_media", "Heavy social media use"),
+                ],
                 tests=[test_row("Sleep deprivation × sadness (χ²)", st["sleep_chi2"], "chi2", "cramers_v", "Cramér's V"),
                        test_row("Bullied × sadness (χ²)", st["bully_chi2"], "chi2", "cramers_v", "Cramér's V"),
                        test_row("Inactive × sadness (χ²)", st["inactivity_chi2"], "chi2", "cramers_v", "Cramér's V"),
                        test_row("Heavy social media × sadness (χ²)", st["social_media_chi2"], "chi2", "cramers_v", "Cramér's V")],
                 rules=P.mine_sadness_rules(yr).head(8),
-                clusters=dict(metrics=P.run_clustering(yr)[0], profiles=P.run_clustering(yr)[1].reset_index()),
+                clusters=clusters,
                 describe=describe(yr, {"sleep_hours": "Hours of sleep on a school night", "active_days": "Days physically active (0–7)",
                                        "sadness": "Persistent sadness (share)", "bullied": "Bullied at school or online (share)",
                                        "heavy_social_media": "Social media several times a day or more (share)"}),
                 skipped=[dict(question=k, share=float(v)) for k, v in P.load_raw()[["sad", "sleep_code", "active_code",
-                         "social_media_code", "bullied_school"]].isna().mean().items()],
+                         "social_media_code", "bullied_school", "bullied_online", "sex"]].isna().mean().items()],
                 histograms=[histogram(yr["sleep_hours"], np.arange(3.5, 11, 1), "Hours of sleep on a school night",
-                                      "4 = four hours or less, 10 = ten or more. CDC counts fewer than 8 as not enough.")],
+                                      "4 = four hours or less, 10 = ten or more. Fewer than 8 hours is considered insufficient sleep.")],
                 dr=safe("dimensionality reduction", lambda: dr_block(P.get_behavior_matrix(yr), yr["sadness"].values,
-                                                                     {0: "No persistent sadness", 1: "Persistent sadness"})),
-                cluster_map=safe("cluster map", lambda: cluster_map(P.get_behavior_matrix(yr), 4, 1200)))
+                                                                     {0: "No persistent sadness", 1: "Persistent sadness"},
+                                                                     aggregate_pca=True)),
+                cluster_map=full_cluster_map)
 
 
 def extras_energy(P):
@@ -257,8 +370,9 @@ def energy_dr(P, df):
 # ---------------------------------------------------------------- interpretations (words + computed numbers)
 
 def _pc1_mean(D, category):
-    xs = [q["x"] for q in D["pca"] if q["c"] == category]
-    return float(np.mean(xs)) if xs else float("nan")
+    points = [q for q in D["pca"] if q["c"] == category]
+    count = sum(q.get("n", 1) for q in points)
+    return float(sum(q["x"] * q.get("n", 1) for q in points) / count) if count else float("nan")
 
 
 def _metric(M, method, key):
@@ -271,10 +385,9 @@ def interpret_academic(X):
     D, M, prof = X["dr"], X["cluster_map"], X["clusters"]["profiles"]
     v = D["variance"]
     g = {int(r["cluster"]): r for r in prof.to_dict("records") if r["cluster"] != "DBSCAN noise"}
-    noise = next((r for r in prof.to_dict("records") if r["cluster"] == "DBSCAN noise"), None)
     dr = [
         f"PC1 ({v[0]:.0%} of the variance) is course progress: it loads on the number of units enrolled in and passed in both "
-        f"semesters. Graduates sit at {_pc1_mean(D, 'Graduated'):+.1f} on PC1 on average, dropouts at {_pc1_mean(D, 'Dropped out'):+.1f}.",
+        f"semesters.",
         f"PC2 ({v[1]:.0%}) sets the semester-1 pass rate against age: young students who pass a large share of their units sit high.",
         "t-SNE tells the same story: graduates and dropouts form mostly separate neighbourhoods, with an overlap zone between them.",
         f"Only PC1 and PC2 are worth reading: from PC3 on, each component adds {v[2]:.0%} or less.",
@@ -288,9 +401,6 @@ def interpret_academic(X):
         f"Group 3 ({g[2]['size']:.0f}) is the typical student: about 21 years old, passes {g[2]['units_passed']:.1f} of {g[2]['units_enrolled']:.1f} "
         f"units, {g[2]['scholarship_rate']:.0%} hold a scholarship. {g[2]['dropout_rate']:.0%} drop out.",
     ]
-    if noise:
-        cl.append(f"DBSCAN leaves {noise['size']:.0f} students outside every dense group; {noise['dropout_rate']:.0%} of them drop out, "
-                  "so unusual profiles are a warning sign too.")
     return dr, cl
 
 
@@ -301,9 +411,7 @@ def interpret_wellbeing(X):
     dr = [
         f"The variance is spread almost evenly ({', '.join(f'{x:.0%}' for x in v)}): there is no dominant direction, so PCA cannot "
         "compress these five yes/no behaviours. Each one carries its own information.",
-        f"PC1 ({v[0]:.0%}) loads positively on every risk (female, bullied, sleep-deprived): a general-risk axis. Students reporting "
-        f"persistent sadness sit at {_pc1_mean(D, 'Persistent sadness'):+.2f} on PC1, others at {_pc1_mean(D, 'No persistent sadness'):+.2f}: "
-        "a shift, not a separation.",
+        f"PC1 ({v[0]:.0%}) loads positively on every risk (female, bullied, sleep-deprived): a general-risk axis.",
         f"PC2 ({v[1]:.0%}) sets inactivity against heavy social media.",
         f"t-SNE is not shown: only {D['n_unique']} different answer combinations exist, so its map would just scatter copies of "
         "the same few points and could not be interpreted.",
@@ -316,8 +424,6 @@ def interpret_wellbeing(X):
         f"Group 3 ({g[2]['size']:.0f}): enough sleep, active: {g[2]['sadness_rate']:.0%}, the lowest.",
         f"Group 4 ({g[3]['size']:.0f}): boys, all sleeping under 8 hours, active: {g[3]['sadness_rate']:.0%}. Same sleep as group 2, "
         "much less sadness: sex matters as much as sleep.",
-        f"DBSCAN and OPTICS cannot be interpreted here: identical answers form perfectly dense 'groups' of single combinations "
-        f"(OPTICS silhouette {_metric(M, 'optics', 'silhouette'):.2f} looks excellent only for that reason).",
     ]
     return dr, cl
 
@@ -327,11 +433,9 @@ def interpret_energy(X):
     v = D["variance"]
     g = {int(r["group"]): r for r in prof.to_dict("records")}
     dr = [
-        f"Each day is a 24-hour load curve of the academic building. PC1 ({v[0]:.0%}) is the overall daytime level: every hour loads "
-        f"positively, most around midday. Teaching days sit at {_pc1_mean(D, 'Teaching day'):+.1f}, low-activity days at "
+        f"Each day is a 24-hour load curve of the academic building. PC1 ({v[0]:.0%}) is the overall daytime level "
         f"{_pc1_mean(D, 'Low-activity day'):+.1f}: the calendar is the main source of variation.",
-        f"PC2 ({v[1]:.0%}) is the early-morning load (3:00 to 7:00). Both day types average close to 0 on it, so this base load "
-        "is not explained by the teaching calendar.",
+        f"PC2 ({v[1]:.0%}) is the early-morning load (3:00 to 7:00). ",
         "t-SNE separates teaching days from low-activity days into two regions, matching PC1.",
         f"Together PC1 and PC2 explain {v[0] + v[1]:.0%}: a day's 24 numbers are well summarised by two.",
     ]
@@ -342,9 +446,6 @@ def interpret_energy(X):
         f"Group 2 ({g[1]['days']:.0f} days): normal teaching days ({g[1]['teaching_share']:.0%} teaching); about {g[1]['noon_power'] / 1000:.0f} kW at noon.",
         f"Group 3 ({g[2]['days']:.0f} days): high-load teaching days ({g[2]['teaching_share']:.0%} teaching, no vacation); "
         f"about {g[2]['noon_power'] / 1000:.0f} kW at noon.",
-        f"DBSCAN also finds {_metric(M, 'dbscan', 'n_clusters'):.0f} dense groups, but they only partly match the K-Means groups "
-        f"(adjusted Rand index {M['dbscan_kmeans_agreement']:.2f}, where 1 = identical), and it leaves "
-        f"{_metric(M, 'dbscan', 'noise_share'):.0%} of days as unusual. We did not check what happened on those days.",
     ]
     return dr, cl
 

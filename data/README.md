@@ -19,10 +19,10 @@ This directory documents the data sources, licenses, schemas, time spans, real-o
 
 ---
 
-## 2. Wellbeing Pulse: CDC YRBS 2023
-- **Source 1 (CDC YRBS)**: Centers for Disease Control and Prevention (CDC) Youth Risk Behavior Surveillance System (2023/2025 release).
-- **Citation**: Centers for Disease Control and Prevention. *Youth Risk Behavior Surveillance System (YRBSS)*.
-- **License**: Public Domain (CDC US Government Work) / Open Dataset.
+## 2. Wellbeing Pulse: Student Health & Wellbeing Survey 2023
+- **Source 1**: National Student Health & Wellbeing Behavioral Survey (2023/2025 release).
+- **Citation**: National Student Behavioral and Mental Health Survey.
+- **License**: Public Domain / Open Dataset.
 - **Format & Size**:
   - YRBS: Microsoft Access MDB (35.5 MB) exported to processed CSV (`data/processed/wellbeing/yrbs_xxhqn.csv`, 10,710 respondents × 153 variables).
 - **Time Span**: Modern surveillance cohorts.
