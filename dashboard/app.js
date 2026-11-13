@@ -648,59 +648,81 @@ function robustnessPage() {
 function conclusionsPage() {
   const A = DATA.pulses.academic, W = DATA.pulses.wellbeing, E = DATA.pulses.energy;
   const v = (pulse, id) => pulse.robustness.values[id].DEFAULT;
-  const a3 = A.robustness.values.A3["zero_grade=as_score"] / v(A, "A3");
-  const bandLow = (A.evidence.A4.tests || [])[0];
-  const academicRules = table([
-    { when: "Week 1", rule: "Fees not paid or in debt", flagged: "18.5%", caught: "39%", precision: "82%" },
-    { when: "End of semester 1", rule: "Passed half or fewer of semester-1 courses", flagged: "22.3%", caught: "56%", precision: "98%" },
-    { when: "End of semester 1", rule: "Passed half or fewer of semester-1 courses or fees not paid", flagged: "27.8%", caught: "68%", precision: "95%" },
-    { when: "End of semester 2", rule: "Passed half or fewer of semester-2 courses", flagged: "26.8%", caught: "66%", precision: "97%" },
-  ], [
+
+  // Part 1: simple early-warning rules (no model), computed by the export
+  const rules = A.extras.simple_rules;
+  const best = rules.find((r) => r.rule.includes("or fees not paid"));
+  const week1 = rules.find((r) => r.when === "Week 1");
+  const rulesTable = table(rules, [
     { label: "When", value: (r) => r.when },
-    { label: "Rule", value: (r) => r.rule },
-    { label: "Students flagged", numeric: true, value: (r) => r.flagged },
-    { label: "Future dropouts caught", numeric: true, value: (r) => r.caught },
-    { label: "Flagged students who dropped out", numeric: true, value: (r) => r.precision },
+    { label: "Flag a student if…", value: (r) => r.rule },
+    { label: "Students flagged", numeric: true, value: (r) => percent(r.flagged, 0) },
+    { label: "Future dropouts caught", numeric: true, value: (r) => percent(r.caught, 0) },
+    { label: "Flagged who really drop out", numeric: true, value: (r) => percent(r.precision, 0) },
   ]);
-  let holds = 0, tested = 0;
+
+  // Part 2: how much the answers depend on cleaning choices
+  let holds = 0, tested = 0, testChecks = 0;
+  const testChanges = [];
+  const fragile = [];
   for (const p of PULSES) {
     const pulse = DATA.pulses[p];
-    const counts = displayedRobustnessCounts(pulse, displayedFindingIds(p, pulse));
-    holds += counts.holds;
-    tested += counts.tested;
+    holds += pulse.robustness.summary.holds;
+    tested += pulse.robustness.summary.tested;
+    testChecks += pulse.test_changes.n_checks;
+    for (const c of pulse.test_changes.changes) testChanges.push({ ...c, pulse: p });
+    for (const f of pulse.robustness.fragility) if (f.verdict === "fragile") fragile.push({ ...f, pulse: p });
   }
+  const unchangedTests = testChecks - testChanges.length;
+  const a3 = A.robustness.values.A3["zero_grade=as_score"] / v(A, "A3");
+  const en3 = testChanges.filter((c) => c.finding === "EN3");
+  const en3Range = en3.length ? `${pValue(Math.min(...en3.map((c) => c.p_variant)))}–${pValue(Math.max(...en3.map((c) => c.p_variant)))}` : "";
+
   $("#app").innerHTML = `<h1>Conclusions</h1>
-    <h2>① Academic: who drops out, and how early can we tell?</h2>
-    <p class="small muted">Simple rule-based contact lists, among 3,630 students with resolved outcomes (1,421 dropouts). These are observed rates, not regression predictions.</p>
-    ${academicRules}
-    <p class="small">At the end of semester 1, the combined course-progress and fee rule flags 27.8% of students and catches 68% of future dropouts; 95% of those flagged later drop out. Waiting until semester 2 does not improve the rule's yield (66% caught). Without a scholarship is a much broader flag: it catches 91% of dropouts but includes 73% of all students, so it is less practical as a contact list.</p>
     <ul class="notes">
-      <li>Debtors drop out ${formatFinding("A1", v(A, "A1"))} more often, and students without a scholarship ${formatFinding("A2", v(A, "A2"))} more often.</li>
-      <li>Debt still matters among students with similar semester-1 results, except those already failing${bandLow ? ` (p = ${pValue(bandLow.p)} there)` : ""}.</li>
-      <li>A grade of 0 is a missing exam, not a score: treating it as a score would make the grade gap ${number(a3, 1)}× too big.</li>
+      <li><b>① Academic:</b> dropout can be spotted early from enrolment and semester-1 records; debt and missing scholarships are the clearest early signs.</li>
+      <li><b>② Wellbeing:</b> bullying, short sleep and no exercise all go with persistent sadness; bullying most strongly.</li>
+      <li><b>③ Energy:</b> building energy follows the teaching calendar; the night-time term effect is likely but not proven once the season is removed.</li>
     </ul>
-    <h2>② Wellbeing: which behaviours co-occur with persistent sadness?</h2>
-    <ul class="notes">
-      <li>Bullying has the strongest link (${formatFinding("W2", v(W, "W2"))}), then sleeping under 8 hours (${formatFinding("W1", v(W, "W1"))}),
-        then no physical activity (${formatFinding("W3", v(W, "W3"))}). All three tests reject H0.</li>
-      <li>All three hold under every cleaning choice, including weighted and unweighted rates.</li>
+
+    <h2>Answer to the umbrella question</h2>
+    <div class="question"><b>Can routine campus data warn a university early enough to act, and how much do those warnings depend on our
+      data-cleaning decisions?</b></div>
+
+    <h3>1. Can routine campus data warn early enough to act?</h3>
+    <p><b>Yes, for dropout.</b> Simple rules on records every university already has, with no model:</p>
+    <div class="card">${rulesTable}</div>
+    <ul class="notes" style="margin-top:12px">
+      <li>On day one, a fee check flags ${percent(week1.flagged, 0)} of students and already finds ${percent(week1.caught, 0)} of future dropouts.</li>
+      <li>At the end of semester 1, one more check flags ${percent(best.flagged, 0)} of students and finds <b>${percent(best.caught, 0)} of future dropouts</b>;
+        ${percent(best.precision, 0)} of those flagged really leave. Waiting for semester 2 adds nothing.</li>
+      <li><b>Partly, for wellbeing:</b> the survey shows <i>which</i> students are at risk (bullied, short sleepers, inactive), which is enough to
+        target support, but it is collected once a year, so it cannot warn about one student in time.</li>
+      <li><b>Not about students, for energy:</b> meter data follows the teaching calendar and shows how the campus is used. It helps
+        operations (cooling, backup power), not early warning.</li>
     </ul>
-    <h2>③ Energy: when does a campus building behave differently, and why?</h2>
+
+    <h3>2. How much do the warnings depend on cleaning decisions?</h3>
+    <p><b>Mostly not.</b></p>
     <ul class="notes">
-      <li>The academic building uses ${formatFinding("EN1", v(E, "EN1"))} more on teaching days; the hostels use ${formatFinding("EN2", v(E, "EN2"))} more at night in term.</li>
-    </ul>
-    <h2>The umbrella question</h2>
-    <ul class="notes">
-      <li>${holds} of ${tested} finding × cleaning-choice checks hold: most findings are solid.</li>
-      <li>A few reasonable-looking choices change the answer (treating missing exams as 0, filling meter gaps), so cleaning
-        decisions should be reported next to the numbers.</li>
+      <li>${holds} of ${tested} finding × cleaning-choice checks keep their direction and size (Robustness page).</li>
+      <li>${unchangedTests} of ${testChecks} hypothesis-test decisions stay the same under every cleaning choice.</li>
     </ul>
     <h2>Limitations</h2>
     <ul class="notes">
-      <li>Three institutions in three countries, none of them ours: we compare conclusions, never join rows.</li>
+      <li>Three institutions in three countries, none of them ours: the method transfers, the numbers may not.</li>
       <li>All findings are associations, not causes.</li>
       <li>The energy calendar has no exam dates, so we compare teaching days and vacations instead.</li>
       <li>Decisions are changed one at a time; combinations are not tested.</li>
+    </ul>
+
+    <h2>Next steps</h2>
+    <ul class="notes">
+      <li><b>Indian university data:</b> run the same pipeline on records from an Indian institution (AISHE data, or our own university with ethics approval) to see which warning signs carry over.</li>
+      <li><b>Pilot the semester-1 rule:</b> flag students who passed half or fewer of their semester-1 courses or have unpaid fees, contact half of them at random, and measure whether dropout falls. That would turn an association into a cause.</li>
+      <li><b>Combinations of cleaning choices:</b> test several decisions changed together, not only one at a time.</li>
+      <li><b>Wellbeing at university level:</b> use a university student survey, and survey-design tests that use the strata and sampling units.</li>
+      <li><b>Energy with exam dates and occupancy:</b> add the exam timetable, the occupancy counts and the weather data to separate exams, crowding and season directly.</li>
     </ul>`;
 }
 

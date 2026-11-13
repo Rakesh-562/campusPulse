@@ -320,3 +320,22 @@ def finding_evidence(decisions: dict | None = None) -> dict:
                    bars=[dict(label=b.band, value=float(b.gap), n=int(b.n)) for b in bands.itertuples()],
                    test=band_tests[1] if len(band_tests) > 1 else band_tests[0], tests=band_tests),
     }
+
+
+# ---------------------------------------------------------------- simple early-warning rules (no model)
+
+def simple_rules(df: pd.DataFrame) -> list:
+    """Rules a university could apply by hand. For each: share of students flagged, share of all future
+    dropouts caught, and share of flagged students who really drop out."""
+    y = df["dropout"] == 1
+    fees_late = df["Tuition fees up to date"] == 0
+    low_sem1 = (df["approval_rate_sem1"] <= 0.5).fillna(False)
+    rate_sem2 = df["Curricular units 2nd sem (approved)"] / df["Curricular units 2nd sem (enrolled)"].replace(0, np.nan)
+    rules = [
+        ("Week 1", "Fees not paid or in debt", fees_late | (df["Debtor"] == 1)),
+        ("End of semester 1", "Passed half or fewer of semester-1 courses", low_sem1),
+        ("End of semester 1", "Passed half or fewer of semester-1 courses, or fees not paid", low_sem1 | fees_late),
+        ("End of semester 2", "Passed half or fewer of semester-2 courses", (rate_sem2 <= 0.5).fillna(False)),
+    ]
+    return [dict(when=w, rule=r, flagged=float(m.mean()), caught=float(y[m].sum() / y.sum()), precision=float(y[m].mean()))
+            for w, r, m in rules]

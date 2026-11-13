@@ -271,6 +271,7 @@ def extras_academic(P):
                           no_units_graduated=int(((raw[P.ENROLLED1] == 0) & (raw["Target"] == "Graduate")).sum())),
         a3_by_zero_grade=[dict(option=k, value=v) for k, v in a3.items()],
         timeline=P.run_timeline(df),
+        simple_rules=P.simple_rules(df),
         debt_by_band=strat,
         tests=[test_row("Debtor × dropout (χ²)", st["debtor_chi2"], "chi2", "cramers_v", "Cramér's V"),
                test_row("Scholarship × dropout (χ²)", st["scholarship_chi2"], "chi2", "cramers_v", "Cramér's V"),
@@ -468,6 +469,21 @@ def forensics():
                 missing=int(df.isna().sum().sum()), duplicates=int(df.drop(columns="Student_ID").duplicated().sum()))
 
 
+def test_decision_changes(P) -> list:
+    """Rerun every finding's hypothesis test under each alternative cleaning choice; list the decisions that change."""
+    D = defaults(P.DECISIONS)
+    base = {k: e["test"] for k, e in P.finding_evidence(D).items()}
+    changes = []
+    for dec, opts in P.DECISIONS.items():
+        for o in opts[1:]:
+            for k, e in P.finding_evidence({**D, dec: o}).items():
+                if e["test"]["decision"] != base[k]["decision"]:
+                    changes.append(dict(finding=k, variant=f"{dec}={o}", p_default=base[k]["p"], p_variant=e["test"]["p"],
+                                        default=base[k]["decision"], variant_decision=e["test"]["decision"]))
+    n_checks = len(base) * sum(len(o) - 1 for o in P.DECISIONS.values())
+    return dict(changes=changes, n_checks=n_checks)
+
+
 def first(cleaned):
     """clean() returns a table, or (table, extra table) for wellbeing."""
     return cleaned[0] if isinstance(cleaned, tuple) else cleaned
@@ -486,7 +502,8 @@ def main():
             extras["dr_notes"], extras["cluster_notes"] = globals()[f"interpret_{name}"](extras)
             block.update(available=True, log=log.to_frame().drop(columns="time"), robustness=robustness_block(P),
                          extras=extras, evidence=P.finding_evidence(),
-                         surprising_rules=P.surprising_rules(first(P.clean(defaults(P.DECISIONS)))))
+                         surprising_rules=P.surprising_rules(first(P.clean(defaults(P.DECISIONS)))),
+                         test_changes=test_decision_changes(P))
             print(f"[ok]      {name}")
         except FileNotFoundError as e:
             block.update(available=False, reason=str(e))
